@@ -77,6 +77,12 @@ class Base(unittest.TestCase):
     def test_the_panel_can_write_server_properties(self):
         self.assertIn("mc-data:/data", BASE["services"]["kpanel"]["volumes"])
 
+    def test_the_default_server_is_a_stable_paper_build(self):
+        """A beta can damage a world, and upgrades are one-way: opting in is the user's call."""
+        env = BASE["services"]["mc"]["environment"]
+        self.assertNotIn("PAPER_CHANNEL", env)
+        self.assertTrue(env["PAPER_BUILD"].isdigit())  # pinned, never floating
+
     def test_the_base_carries_no_profiles(self):
         for name, svc in BASE["services"].items():
             self.assertIsNone(svc.get("profiles"), name)

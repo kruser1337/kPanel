@@ -19,7 +19,7 @@
 
 services:
   mc:
-    # Paper 26.3 needs Java 25; the java21 tag fails with UnsupportedClassVersionError.
+    # Paper 26.x needs Java 25; the java21 tag fails with UnsupportedClassVersionError.
     image: itzg/minecraft-server:stable-java25
     restart: unless-stopped
     tty: true
@@ -33,13 +33,13 @@ services:
 
       # --- version pin -------------------------------------------------------
       # Pinned, never floating: a restart must not silently change the jar.
-      # 26.3 has only beta (experimental) Paper builds so far, and PAPER_CHANNEL
-      # is required for those; drop it once you pin a stable build.
-      # Never downgrade VERSION: a newer version migrates the world on load.
+      # The newest version with a STABLE Paper build. A beta (experimental)
+      # build is your call, not the default: see "Newer Minecraft versions" in
+      # README.md. Never downgrade VERSION: a newer version migrates the world
+      # on load, so there is no way back without a backup.
       TYPE: "PAPER"
-      VERSION: "26.3"
-      PAPER_BUILD: "141"
-      PAPER_CHANNEL: "experimental"
+      VERSION: "26.2"
+      PAPER_BUILD: "129"
 
       # --- memory ------------------------------------------------------------
       # MEMORY must be blank or it overrides INIT_MEMORY/MAX_MEMORY.

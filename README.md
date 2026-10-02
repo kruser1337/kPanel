@@ -92,6 +92,20 @@ If you'd rather keep settings in git, fork this repository and set
 your fork's `docker-compose.yml` instead of writing the file, so every change
 is reviewed and kept in history.
 
+## Newer Minecraft versions
+
+The compose pins the newest Minecraft version that has a **stable** Paper
+build. When a new version is out, Paper publishes beta (experimental) builds
+first. You can run one, but it's your call:
+
+- **Betas can have bugs that damage a world.** Take a backup first.
+- **There's no way back.** A newer version migrates the world on load, and it
+  can't be opened with an older one again. Going back means restoring a backup.
+- **Plugins** may not support the new version yet.
+
+To opt in, set `VERSION` and `PAPER_BUILD` to the beta and add
+`PAPER_CHANNEL: "experimental"`. See [Upgrading](docs/operations.md#upgrading).
+
 ## What's in the stack
 
 | Container | Job |
