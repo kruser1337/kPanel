@@ -12,8 +12,10 @@
 #   compose/lan.yml        reach the panel from other devices on your network
 #   compose/tailscale.yml  reach it from anywhere over your tailnet, with HTTPS
 #
-# The panel's Settings page edits the gameplay values in THIS file (via a pull
-# request, when you connect a GitHub fork), so keep them as plain values here.
+# Gameplay settings (difficulty, MOTD, max players, ...) are not set here: the
+# panel's Settings page writes them to server.properties. The image rewrites
+# every key it has a variable for on each start, so a key set below would undo
+# the panel's edits to it.
 
 services:
   mc:
@@ -46,13 +48,6 @@ services:
       INIT_MEMORY: "1G"
       MAX_MEMORY: "2G"
       USE_AIKAR_FLAGS: "true"
-
-      # --- gameplay (the panel's Settings page edits these) ----------------------
-      MOTD: "Hosted with kPanel"
-      DIFFICULTY: "normal"
-      MAX_PLAYERS: "8"
-      VIEW_DISTANCE: "10"
-      SIMULATION_DISTANCE: "10"
 
       # --- who can join ---------------------------------------------------------
       # ONLINE_MODE must stay TRUE: it checks joiners against Mojang's login.
@@ -146,7 +141,7 @@ services:
       - mc-backups:/backups:ro
       - filebrowser-db:/home/filebrowser/data
 
-  # The panel: dashboard, players, gamerules, logs, and (optional) settings.
+  # The panel: dashboard, settings, players, gamerules, logs.
   kpanel:
     build:
       context: ./kpanel
@@ -168,8 +163,8 @@ services:
       # The footer asks api.github.com twice a day for a newer kPanel release.
       # Set KPANEL_UPDATE_CHECK=0 to never contact GitHub for it.
       KPANEL_UPDATE_CHECK: "${KPANEL_UPDATE_CHECK:-1}"
-      # Optional: the Settings page, which opens pull requests against your
-      # fork. Hidden until both are set (see .env.example).
+      # Optional: with both set, Settings opens pull requests against your fork
+      # instead of writing server.properties (see .env.example).
       GITHUB_TOKEN: "${KPANEL_GITHUB_TOKEN:-}"
       GITHUB_REPO: "${KPANEL_GITHUB_REPO:-}"
       GITHUB_BRANCH: "main"
@@ -182,9 +177,10 @@ services:
       # What players type to connect; the dashboard shows and pings it.
       PUBLIC_HOST: "${MC_PUBLIC_HOST:-localhost}"
       GAME_HOST: "mc"
-    # Read-only: every write goes through RCON or a pull request.
+    # Writable for one file: Settings saves server.properties. Everything else
+    # the panel changes goes through RCON.
     volumes:
-      - mc-data:/data:ro
+      - mc-data:/data
       - mc-backups:/backups:ro
       # The panel's only state: dashboard history.
       - kpanel-data:/var/lib/kpanel

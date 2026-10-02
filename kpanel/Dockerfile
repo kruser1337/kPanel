@@ -8,7 +8,7 @@ WORKDIR /app
 COPY app.py compose_edit.py gamerules.py github.py history.py procstats.py rcon.py release.py settings.py ui.py \
      properties_meta.json gamerules_meta.json paper-logo.png favicon.png favicon.LICENSE.txt ui.LICENSE.txt ./
 
-# uid 1000, like the itzg image, so /data/server.properties (read-only mount) is readable.
+# uid 1000, like the itzg image, so the panel can read and write /data/server.properties.
 RUN adduser -D -u 1000 admin
 # Dashboard history lives here (volume kpanel-data). Owned by 1000 in the image,
 # so a fresh named volume mounted over it inherits that ownership.

@@ -1,4 +1,4 @@
-"""Tests for compose_edit and settings, run against the REAL compose file.
+"""Tests for compose_edit and settings, run against the REAL compose file (as a fork pins it).
 
     cd kpanel && python -m unittest -v
 """
@@ -11,7 +11,9 @@ import yaml
 import compose_edit as ce
 import settings as st
 
-COMPOSE = (pathlib.Path(__file__).parent.parent / "docker-compose.yml").read_text()
+BASE = (pathlib.Path(__file__).parent.parent / "docker-compose.yml").read_text()
+# Git mode: a fork of the base in which panel PRs have already pinned some values.
+COMPOSE = ce.apply_changes(BASE, {"MOTD": "Hosted with kPanel", "DIFFICULTY": "normal", "MAX_PLAYERS": "8"})
 
 
 def env_of(text):
@@ -175,6 +177,25 @@ class Properties(unittest.TestCase):
         self.assertEqual(props["motd"], "Grüße aus dem Norden")
         self.assertEqual(props["generator-settings"], "{}")
         self.assertEqual(props["level-seed"], "")
+
+    FILE = ("#Minecraft server properties\n#Thu Oct 01 12:00:00 UTC 2026\n"
+            "difficulty=normal\nrcon.password=s3cret\nlevel-type=minecraft\\:normal\nmotd=Hi\n")
+
+    def test_write_changes_only_the_wanted_lines(self):
+        out = st.write_properties(self.FILE, {"difficulty": "hard"})
+        self.assertEqual(changed_lines(self.FILE, out), [("difficulty=normal", "difficulty=hard")])
+        self.assertIn("rcon.password=s3cret\n", out)              # secrets and comments untouched
+
+    def test_write_appends_a_key_the_file_lacks(self):
+        out = st.write_properties(self.FILE, {"spawn-protection": "0"})
+        self.assertTrue(out.endswith("motd=Hi\nspawn-protection=0\n"))
+
+    def test_write_escapes_like_minecraft_and_reads_back(self):
+        for motd in ("Grüße aus dem Norden", "a=b: c\\d", " leading space", "§6gold 🎮", "#not a comment"):
+            out = st.write_properties(self.FILE, {"motd": motd})
+            self.assertTrue(out.isascii(), motd)
+            self.assertEqual(st.parse_properties(out)["motd"], motd)
+        self.assertIn("motd=Gr\\u00FC\\u00DFe", st.write_properties(self.FILE, {"motd": "Grüße"}))
 
 
 if __name__ == "__main__":

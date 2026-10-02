@@ -66,6 +66,17 @@ class Base(unittest.TestCase):
     def test_the_panel_edits_this_file(self):
         self.assertEqual(BASE["services"]["kpanel"]["environment"]["COMPOSE_PATH"], "docker-compose.yml")
 
+    def test_the_base_sets_no_property_the_panel_edits(self):
+        """The image rewrites every key it has a variable for on each start, so
+        one set here would silently undo the Settings page's edits to it."""
+        import settings as st
+        env = BASE["services"]["mc"]["environment"]
+        editable = {p.env for p in st.PROPS.values() if p.env and not p.locked}
+        self.assertEqual(editable & set(env), set())
+
+    def test_the_panel_can_write_server_properties(self):
+        self.assertIn("mc-data:/data", BASE["services"]["kpanel"]["volumes"])
+
     def test_the_base_carries_no_profiles(self):
         for name, svc in BASE["services"].items():
             self.assertIsNone(svc.get("profiles"), name)
