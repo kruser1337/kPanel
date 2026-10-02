@@ -107,10 +107,11 @@ is reviewed and kept in history.
 
 ## Server types
 
-Built and tested on Paper. The panel only uses RCON, the server-list ping and
-the files in `/data`, so other types the image supports (`TYPE: "FABRIC"`,
-`"VANILLA"`, `"PURPUR"`, …) should work too; drop `PAPER_BUILD` when you
-switch. The TPS tile needs the `tps` command of Paper, Purpur and Spigot, so on
+Built and tested on Paper. Other types the image supports (`TYPE: "FABRIC"`,
+`"VANILLA"`, `"PURPUR"`, …) are untested so far, so
+[reports are welcome](https://github.com/kruser1337/kPanel/issues). The panel
+only uses RCON, the server-list ping and the files in `/data`; drop
+`PAPER_BUILD` when you switch. The TPS tile needs the `tps` command of Paper, Purpur and Spigot, so on
 Fabric and vanilla it shows `—`. Choose before the first start: Paper keeps the
 Nether and End in separate folders, so an existing world needs moving first.
 
