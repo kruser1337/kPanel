@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 REPO = "kruser1337/kPanel"
 CHECK_SECONDS = 12 * 3600  # unauthenticated API: 60 requests/h per IP, this uses 2/day
 
