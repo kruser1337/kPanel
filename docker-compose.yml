@@ -1,0 +1,196 @@
+# kPanel: a Minecraft server with a web admin panel.
+#
+#   docker compose up -d
+#
+# That is the whole setup. No .env needed: players join on port 25565, and the
+# panel and file manager open on this machine only:
+#
+#   panel         http://localhost:8080
+#   file manager  http://localhost:8081
+#
+# Optional extras are overlays, added with -f (see README.md):
+#   compose/lan.yml        reach the panel from other devices on your network
+#   compose/tailscale.yml  reach it from anywhere over your tailnet, with HTTPS
+#
+# The panel's Settings page edits the gameplay values in THIS file (via a pull
+# request, when you connect a GitHub fork), so keep them as plain values here.
+
+services:
+  mc:
+    # Paper 26.3 needs Java 25; the java21 tag fails with UnsupportedClassVersionError.
+    image: itzg/minecraft-server:stable-java25
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    # The game port, on every interface: this is what players connect to.
+    ports:
+      - "25565:25565"
+    environment:
+      EULA: "TRUE"
+      TZ: "${TZ:-Etc/UTC}"
+
+      # --- version pin -------------------------------------------------------
+      # Pinned, never floating: a restart must not silently change the jar.
+      # 26.3 has only beta (experimental) Paper builds so far, and PAPER_CHANNEL
+      # is required for those; drop it once you pin a stable build.
+      # Never downgrade VERSION: a newer version migrates the world on load.
+      TYPE: "PAPER"
+      VERSION: "26.3"
+      PAPER_BUILD: "141"
+      PAPER_CHANNEL: "experimental"
+
+      # --- memory ------------------------------------------------------------
+      # MEMORY must be blank or it overrides INIT_MEMORY/MAX_MEMORY.
+      # 2G suits a few players; raise MAX_MEMORY if your host has room.
+      MEMORY: ""
+      INIT_MEMORY: "1G"
+      MAX_MEMORY: "2G"
+      USE_AIKAR_FLAGS: "true"
+
+      # --- gameplay (the panel's Settings page edits these) ----------------------
+      MOTD: "Hosted with kPanel"
+      DIFFICULTY: "normal"
+      MAX_PLAYERS: "8"
+      VIEW_DISTANCE: "10"
+      SIMULATION_DISTANCE: "10"
+
+      # --- who can join ---------------------------------------------------------
+      # ONLINE_MODE must stay TRUE: it checks joiners against Mojang's login.
+      # The whitelist is on, so add yourself on the panel's Players page first.
+      ONLINE_MODE: "TRUE"
+      ENABLE_WHITELIST: "TRUE"
+      ENFORCE_WHITELIST: "TRUE"
+      # Whitelist and ops live only in whitelist.json / ops.json, edited live
+      # over RCON. No WHITELIST/OPS variables on purpose: the image rewrites the
+      # files on every start when either is set, undoing removals.
+      EXISTING_WHITELIST_FILE: "SKIP"
+      EXISTING_OPS_FILE: "SKIP"
+
+      # RCON is how the panel and the backups talk to the server. Deliberately
+      # no RCON_PASSWORD here: when it is unset the image generates a random one
+      # on every start and writes it to /data, where the panel and mc-backup read
+      # it. (Set to an empty string, it would be an empty password.) The port is
+      # never published; only containers in this stack can reach it.
+      ENABLE_RCON: "true"
+    volumes:
+      - mc-data:/data
+
+  mc-backup:
+    image: itzg/mc-backup
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      # Twice a day at fixed clock times, keeping the newest 4 (two days back).
+      # A cron schedule rather than an interval: an interval restarts with the
+      # container, so frequent restarts would mean no backups at all.
+      CRON_SCHEDULE: "0 6,18 * * *"
+      PRUNE_BACKUPS_COUNT: "4"
+      PRUNE_BACKUPS_DAYS: "7"
+      # Flushes and pauses world saves over RCON while archiving. The password
+      # comes from /data/.rcon-cli.env, re-read before every backup.
+      RCON_HOST: "mc"
+      RCON_PORT: "25575"
+    # Healthy = crond is running (backups only run for seconds at a time).
+    healthcheck:
+      test: ["CMD", "pgrep", "crond"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - mc-data:/data:ro
+      - mc-backups:/backups
+
+  # File manager over the world, configs, logs and plugins; backups read-only.
+  filebrowser:
+    # FileBrowser Quantum, the maintained fork of filebrowser/filebrowser.
+    image: gtstef/filebrowser:1.5.6-stable-slim
+    restart: unless-stopped
+    mem_limit: 384m
+    # Published on loopback only, so no login is needed: only this machine can
+    # reach it. compose/lan.yml turns a password on when it publishes wider.
+    ports:
+      - "127.0.0.1:8081:80"
+    # The config is written on every start, so it lives here. defaultEnabled
+    # must be explicit on every source: with more than one, Quantum otherwise
+    # defaults to false and users get "no access to source".
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        cat > /tmp/config.yaml <<'EOF'
+        server:
+          port: 80
+          disableUpdateCheck: true
+          disablePreviews: true
+          disableWebDAV: true
+          sources:
+            - path: /data
+              name: minecraft
+              config:
+                defaultEnabled: true
+            - path: /backups
+              name: backups
+              config:
+                defaultEnabled: true
+                readOnly: true
+        auth:
+          methods:
+            noauth: true
+        EOF
+        exec ./filebrowser -c /tmp/config.yaml
+    # uid 1000, like the server, so files it writes stay readable. Don't edit
+    # world/ files while players are online.
+    volumes:
+      - mc-data:/data
+      - mc-backups:/backups:ro
+      - filebrowser-db:/home/filebrowser/data
+
+  # The panel: dashboard, players, gamerules, logs, and (optional) settings.
+  kpanel:
+    build:
+      context: ./kpanel
+    restart: unless-stopped
+    mem_limit: 96m
+    # Shares mc's process namespace to read the JVM's CPU and memory from /proc.
+    # Deliberately not the Docker socket, which would expose every container's
+    # environment on the host.
+    pid: "service:mc"
+    # Loopback only. That is what makes running without a login safe here.
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      # The panel can op, ban and read the world, so it refuses to start until
+      # it is told how it is protected. Here: only this machine can reach it.
+      # compose/lan.yml clears this and requires KPANEL_BASIC_AUTH instead.
+      KPANEL_ALLOW_NO_AUTH: "1"
+      KPANEL_BASIC_AUTH: "${KPANEL_BASIC_AUTH:-}"
+      # The footer asks api.github.com twice a day for a newer kPanel release.
+      # Set KPANEL_UPDATE_CHECK=0 to never contact GitHub for it.
+      KPANEL_UPDATE_CHECK: "${KPANEL_UPDATE_CHECK:-1}"
+      # Optional: the Settings page, which opens pull requests against your
+      # fork. Hidden until both are set (see .env.example).
+      GITHUB_TOKEN: "${KPANEL_GITHUB_TOKEN:-}"
+      GITHUB_REPO: "${KPANEL_GITHUB_REPO:-}"
+      GITHUB_BRANCH: "main"
+      COMPOSE_PATH: "docker-compose.yml"
+      # The file manager. A localhost link is rewritten in the browser to the
+      # host you opened the panel on, so it also works from another device.
+      FILES_URL: "http://localhost:8081/"
+      RCON_HOST: "mc"
+      RCON_PORT: "25575"
+      # What players type to connect; the dashboard shows and pings it.
+      PUBLIC_HOST: "${MC_PUBLIC_HOST:-localhost}"
+      GAME_HOST: "mc"
+    # Read-only: every write goes through RCON or a pull request.
+    volumes:
+      - mc-data:/data:ro
+      - mc-backups:/backups:ro
+      # The panel's only state: dashboard history.
+      - kpanel-data:/var/lib/kpanel
+
+volumes:
+  mc-data:
+  mc-backups:
+  filebrowser-db:
+  kpanel-data:

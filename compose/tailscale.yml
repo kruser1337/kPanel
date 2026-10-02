@@ -1,0 +1,86 @@
+# Reach the panel and file manager from anywhere, over your tailnet, with real
+# HTTPS certificates:
+#
+#   docker compose -f docker-compose.yml -f compose/tailscale.yml up -d
+#
+#   https://<TS_HOSTNAME>.<TS_TAILNET>/       the panel
+#   https://<TS_HOSTNAME>.<TS_TAILNET>:8443/  the file manager
+#
+# Set TS_HOSTNAME, TS_TAILNET and TS_AUTHKEY in .env first; compose refuses to
+# start without them. Setup and troubleshooting: docs/tailscale.md.
+#
+# The tailnet is the boundary: only devices on it can reach the panel, so it
+# runs without a login, and nothing is published on the host except the game.
+# Needs Docker Compose 2.24 or newer (for !reset).
+
+services:
+  kpanel:
+    # Not published at all: only the sidecar reaches it, over the compose network.
+    ports: !reset []
+    environment:
+      FILES_URL: "https://${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env}:8443/"
+
+  filebrowser:
+    ports: !reset []
+
+  tailscale:
+    image: tailscale/tailscale:v1.102.5
+    restart: unless-stopped
+    # No hostname: key. containerboot takes the device name from TS_HOSTNAME;
+    # a container hostname equal to a service name (e.g. kpanel) collides in
+    # the compose network's DNS and makes http://kpanel:8080 resolve to the
+    # sidecar itself.
+    mem_limit: 160m
+    environment:
+      # Use a TAGLESS auth key: a tagged key whose tag has no tagOwners entry in
+      # the tailnet ACL makes tailscaled hang before login without an error.
+      TS_AUTHKEY: "${TS_AUTHKEY:?set TS_AUTHKEY in .env (a tagless auth key)}"
+      TS_HOSTNAME: "${TS_HOSTNAME:?set TS_HOSTNAME in .env}"
+      # Not read by containerboot; the entrypoint uses it to build serve.json.
+      TS_TAILNET: "${TS_TAILNET:?set TS_TAILNET in .env, e.g. tail1234.ts.net}"
+      TS_STATE_DIR: "/var/lib/tailscale"
+      # The login persists in tailscale-state, so the key is used on first boot only.
+      TS_AUTH_ONCE: "true"
+      TS_SERVE_CONFIG: "/tmp/serve.json"
+      # containerboot's /healthz is 200 only once the node has a tailnet IP; a
+      # process check would pass while tailscaled sits at the login prompt.
+      TS_ENABLE_HEALTH_CHECK: "true"
+      TS_LOCAL_ADDR_PORT: "127.0.0.1:9002"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9002/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    # Writes the serve config, then starts containerboot. $$ is compose's escape
+    # for a literal dollar, so the shell expands these at start.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        cat > /tmp/serve.json <<EOF
+        {
+          "TCP": { "443": { "HTTPS": true }, "8443": { "HTTPS": true } },
+          "Web": {
+            "$${TS_HOSTNAME}.$${TS_TAILNET}:443": {
+              "Handlers": { "/": { "Proxy": "http://kpanel:8080" } }
+            },
+            "$${TS_HOSTNAME}.$${TS_TAILNET}:8443": {
+              "Handlers": { "/": { "Proxy": "http://filebrowser:80" } }
+            }
+          }
+        }
+        EOF
+        exec /usr/local/bin/containerboot
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    depends_on:
+      # service_started, not service_healthy: a flapping healthcheck would
+      # abort the whole stack, Minecraft included.
+      filebrowser:
+        condition: service_started
+      kpanel:
+        condition: service_started
+
+volumes:
+  tailscale-state:

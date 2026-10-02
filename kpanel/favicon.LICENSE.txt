@@ -1,0 +1,8 @@
+favicon.png: diamond pickaxe texture from Minetest Game
+(mods/default/textures/default_tool_diamondpick.png), by BlockMen, 2014.
+Source: https://github.com/minetest/minetest_game
+License: Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
+https://creativecommons.org/licenses/by-sa/3.0/
+
+Used unmodified. This license covers this image only, not the rest of the
+repository.

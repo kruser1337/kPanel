@@ -1,0 +1,6 @@
+.env
+*.env
+!.env.example
+scratch/
+__pycache__/
+kpanel/.venv/

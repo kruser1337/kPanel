@@ -1,0 +1,359 @@
+{
+ "_source": "Minecraft Wiki, Game rule (CC BY-NC-SA 3.0)",
+ "rules": {
+  "advance_time": {
+   "category": "World Updates",
+   "default": "true",
+   "desc": "Whether the daylight cycle and moon phases progress.",
+   "type": "bool"
+  },
+  "advance_weather": {
+   "category": "World Updates",
+   "default": "true",
+   "desc": "Whether the weather can change naturally. The command can still change weather.",
+   "type": "bool"
+  },
+  "allow_entering_nether_using_portals": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the Nether can be entered by using Nether portals.",
+   "type": "bool"
+  },
+  "block_drops": {
+   "category": "Drops",
+   "default": "true",
+   "desc": "Whether blocks should have drops.",
+   "type": "bool"
+  },
+  "block_explosion_drop_decay": {
+   "category": "Drops",
+   "default": "true",
+   "desc": "Whether block loot is dropped by all blocks (false) or randomly (true) depending on how far the block is from the center of a block explosion (e.g. clicking a bed in dimensions other than the Overworld).",
+   "type": "bool"
+  },
+  "command_block_output": {
+   "category": "Chat",
+   "default": "true",
+   "desc": "Whether command blocks should notify admins when they perform commands.",
+   "type": "bool"
+  },
+  "command_blocks_work": {
+   "category": "Miscellaneous",
+   "default": "true",
+   "desc": "Whether command blocks should be enabled in-game.",
+   "type": "bool"
+  },
+  "drowning_damage": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the player should take damage when drowning.",
+   "type": "bool"
+  },
+  "elytra_movement_check": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the server should check player speed when the player is wearing elytra. Often helps with jittering due to lag in multiplayer.",
+   "type": "bool"
+  },
+  "ender_pearls_vanish_on_death": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Controls whether thrown ender pearls vanish when the player dies.",
+   "type": "bool"
+  },
+  "entity_drops": {
+   "category": "Drops",
+   "default": "true",
+   "desc": "Whether entities that are not mobs should have drops.",
+   "type": "bool"
+  },
+  "fall_damage": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the player should take fall damage.",
+   "type": "bool"
+  },
+  "fire_damage": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the player should take damage in fire, lava, campfires, or on magma blocks.",
+   "type": "bool"
+  },
+  "fire_spread_radius_around_player": {
+   "category": "Player",
+   "default": "128",
+   "desc": "Controls the maximum distance in blocks that fire can spread around a player. Set to 0 to disable fire spread. Set to -1 for an unlimited distance.",
+   "type": "int"
+  },
+  "forgive_dead_players": {
+   "category": "Mobs",
+   "default": "true",
+   "desc": "Makes angered neutral mobs within 65 x 21 x 65 blocks centered on the targeted player stop being angry when the player dies.",
+   "type": "bool"
+  },
+  "freeze_damage": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the player should take damage when inside powder snow.",
+   "type": "bool"
+  },
+  "global_sound_events": {
+   "category": "Miscellaneous",
+   "default": "true",
+   "desc": "Whether the wither's spawning sound, the ender dragon's death sound and the end portal activation sound are heard by all players regardless of location.",
+   "type": "bool"
+  },
+  "immediate_respawn": {
+   "category": "Player",
+   "default": "false",
+   "desc": "Players respawn immediately without showing the death screen.",
+   "type": "bool"
+  },
+  "keep_inventory": {
+   "category": "Player",
+   "default": "false",
+   "desc": "Whether the player should keep items and experience in their inventory after death.",
+   "type": "bool"
+  },
+  "lava_source_conversion": {
+   "category": "World Updates",
+   "default": "false",
+   "desc": "Whether new sources of lava are allowed to form.",
+   "type": "bool"
+  },
+  "limited_crafting": {
+   "category": "Player",
+   "default": "false",
+   "desc": "Whether players can craft only those recipes that they have unlocked.",
+   "type": "bool"
+  },
+  "locator_bar": {
+   "category": "Player",
+   "default": "trueeveryone",
+   "desc": "Whether the player's locator bar is enabled, indicating the location of players or entities. Can be set to everyone and off .",
+   "type": "bool\nstring"
+  },
+  "log_admin_commands": {
+   "category": "Chat",
+   "default": "true",
+   "desc": "Whether to log admin commands to server log.",
+   "type": "bool"
+  },
+  "max_block_modifications": {
+   "category": "Miscellaneous",
+   "default": "32768",
+   "desc": "Controls the maximum number of blocks changed when using , , or .",
+   "type": "int"
+  },
+  "max_command_forks": {
+   "category": "Miscellaneous",
+   "default": "65536",
+   "desc": "The maximum number of forks (contexts) that can be created during one tick. Applies to command blocks and functions.",
+   "type": "int"
+  },
+  "max_command_sequence_length": {
+   "category": "Miscellaneous",
+   "default": "65536",
+   "desc": "The maximum length of a chain of commands that can be executed during one tick from one execution source. Applies to command blocks and functions.",
+   "type": "int"
+  },
+  "max_entity_cramming": {
+   "category": "Mobs",
+   "default": "24",
+   "desc": "The maximum number of pushable entities a mob or player can push, before taking entity cramming damage per half-second. Setting to 0 disables the rule. Damage affects Survival-mode or Adventure-mode players, and all mobs but bats. Pushable entities include non-Spectator-mode players, any mob except bats, as well as boats and minecarts.",
+   "type": "int"
+  },
+  "max_minecart_speed": {
+   "category": "Miscellaneous",
+   "default": "8",
+   "desc": "The maximum speed a minecart may reach.",
+   "type": "int\nmin:1\nmax:1000"
+  },
+  "max_snow_accumulation_height": {
+   "category": "World Updates",
+   "default": "1",
+   "desc": "The maximum number of snow layers that can be accumulated on each block.",
+   "type": "int"
+  },
+  "mob_drops": {
+   "category": "Drops",
+   "default": "true",
+   "desc": "Whether mobs should drop items and experience orbs.",
+   "type": "bool"
+  },
+  "mob_explosion_drop_decay": {
+   "category": "Drops",
+   "default": "true",
+   "desc": "Whether block loot is dropped by all blocks (false) or randomly (true) depending on how far the block is from the center of a mob explosion (e.g. Creeper explosion).",
+   "type": "bool"
+  },
+  "mob_griefing": {
+   "category": "Mobs",
+   "default": "true",
+   "desc": "Whether creepers, zombies, endermen, ghasts, withers, ender dragons, rabbits, sheep, villagers, silverfish, snow golems, ravagers and end crystals should be able to change blocks, and whether mobs can pick up items. When mob_griefing is disabled, piglins do not pick up gold ingots, but a player can still barter with them by the item on the mob. Similarly, villagers do not pick up food items but ca",
+   "type": "bool"
+  },
+  "natural_health_regeneration": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the player can regenerate health naturally if their hunger is full enough (doesn't affect external healing, such as golden apples, the Regeneration effect, etc.).",
+   "type": "bool"
+  },
+  "player_movement_check": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether the server should check player speed.",
+   "type": "bool"
+  },
+  "players_nether_portal_creative_delay": {
+   "category": "Player",
+   "default": "0",
+   "desc": "Controls the time that a creative player needs to stand in a nether portal before changing dimensions.",
+   "type": "int"
+  },
+  "players_nether_portal_default_delay": {
+   "category": "Player",
+   "default": "80",
+   "desc": "Controls the time that a non-creative player needs to stand in a nether portal before changing dimensions.",
+   "type": "int"
+  },
+  "players_sleeping_percentage": {
+   "category": "Player",
+   "default": "100",
+   "desc": "What percentage of players in the Overworld must sleep to skip the night. A percentage value of 0 or less allows the night to be skipped by just 1 player, and a percentage value more than 100 prevents players from skipping the night.",
+   "type": "int"
+  },
+  "projectiles_can_break_blocks": {
+   "category": "Drops",
+   "default": "true",
+   "desc": "Whether impact projectiles destroy blocks that are destructible by them, i.e. chorus flowers, pointed dripstone, and decorated pots.",
+   "type": "bool"
+  },
+  "pvp": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether players can damage other players.",
+   "type": "bool"
+  },
+  "raids": {
+   "category": "Mobs",
+   "default": "true",
+   "desc": "Whether raids are enabled.",
+   "type": "bool"
+  },
+  "random_tick_speed": {
+   "category": "World Updates",
+   "default": "31",
+   "desc": "How often a random tick occurs (such as plant growth, leaf decay, etc.) per chunk section per game tick. 0 and negative values disables random ticks, higher numbers increase random ticks. Setting to a high integer results in high speeds of decay and growth. Numbers over 4096 make plant growth or leaf decay instantaneous.",
+   "type": "int"
+  },
+  "reduced_debug_info": {
+   "category": "Miscellaneous",
+   "default": "false",
+   "desc": "Whether the debug screen shows all or reduced information; and whether the effects of F3+B (entity hitboxes) and F3+G (chunk boundaries) are shown.",
+   "type": "bool"
+  },
+  "respawn_radius": {
+   "category": "Player",
+   "default": "10",
+   "desc": "The number of blocks outward from the world spawn coordinates that a player spawns in when first joining a server or when dying without a personal spawnpoint. Has no effect on servers where the default game mode is Adventure.",
+   "type": "int"
+  },
+  "send_command_feedback": {
+   "category": "Chat",
+   "default": "true",
+   "desc": "Whether the feedback from commands executed by a player should show up in chat. Also affects the default behavior of whether command blocks store their output text.",
+   "type": "bool"
+  },
+  "show_advancement_messages": {
+   "category": "Chat",
+   "default": "true",
+   "desc": "Whether advancements should be announced in chat.",
+   "type": "bool"
+  },
+  "show_death_messages": {
+   "category": "Chat",
+   "default": "true",
+   "desc": "Whether death messages are put into chat when a player dies. Also affects whether a message is sent to the pet's owner when the pet dies.",
+   "type": "bool"
+  },
+  "spawn_mobs": {
+   "category": "Spawning",
+   "default": "true",
+   "desc": "Whether mobs should spawn naturally, or via global spawning logic, such as for cats, phantoms, patrols, wandering traders, zombie sieges, or creaking hearts. Does not affect player-specific and other special spawning attempts, like commands, monster spawners, raids, spawn eggs, or iron golems.",
+   "type": "bool"
+  },
+  "spawn_monsters": {
+   "category": "Spawning",
+   "default": "true",
+   "desc": "Whether monsters can spawn naturally.",
+   "type": "bool"
+  },
+  "spawn_patrols": {
+   "category": "Spawning",
+   "default": "true",
+   "desc": "Whether patrols can spawn.",
+   "type": "bool"
+  },
+  "spawn_phantoms": {
+   "category": "Spawning",
+   "default": "true",
+   "desc": "Whether phantoms can spawn in the nighttime.",
+   "type": "bool"
+  },
+  "spawn_wandering_traders": {
+   "category": "Spawning",
+   "default": "true",
+   "desc": "Whether wandering traders can spawn.",
+   "type": "bool"
+  },
+  "spawn_wardens": {
+   "category": "Spawning",
+   "default": "true",
+   "desc": "Whether wardens can spawn.",
+   "type": "bool"
+  },
+  "spawner_blocks_work": {
+   "category": "Spawning",
+   "default": "true",
+   "desc": "Enable or disable monster spawner blocks.",
+   "type": "bool"
+  },
+  "spectators_generate_chunks": {
+   "category": "Player",
+   "default": "true",
+   "desc": "Whether players in Spectator mode can generate chunks.",
+   "type": "bool"
+  },
+  "spread_vines": {
+   "category": "World Updates",
+   "default": "true",
+   "desc": "Whether vines can spread to other blocks. Cave vines, weeping vines, and twisting vines are not affected.",
+   "type": "bool"
+  },
+  "tnt_explodes": {
+   "category": "Miscellaneous",
+   "default": "true",
+   "desc": "Whether TNT explodes after activation.",
+   "type": "bool"
+  },
+  "tnt_explosion_drop_decay": {
+   "category": "Drops",
+   "default": "false",
+   "desc": "Whether block loot is dropped by all blocks (false) or randomly (true) depending on how far the block is from the center of a TNT explosion.",
+   "type": "bool"
+  },
+  "universal_anger": {
+   "category": "Mobs",
+   "default": "false",
+   "desc": "Makes angered neutral mobs attack any nearby player, not just the player that angered them. Works best if forgive_dead_players is disabled.",
+   "type": "bool"
+  },
+  "water_source_conversion": {
+   "category": "World Updates",
+   "default": "true",
+   "desc": "Whether new sources of water are allowed to form.",
+   "type": "bool"
+  }
+ }
+}

@@ -1,0 +1,641 @@
+{
+ "_source": "Minecraft Wiki, Server.properties (CC BY-NC-SA 3.0); itzg/docker-minecraft-server property-definitions.json",
+ "properties": {
+  "accepts-transfers": {
+   "default": "false",
+   "desc": "Whether to accept incoming transfers via a transfer packet.",
+   "env": "ACCEPTS_TRANSFERS",
+   "options": [
+    {
+     "desc": "Incoming transfers are rejected, and the player is disconnected.",
+     "value": "false"
+    },
+    {
+     "desc": "Incoming transfers are allowed, and the server must approve it.",
+     "value": "true"
+    }
+   ],
+   "type": "boolean"
+  },
+  "allow-flight": {
+   "default": "false",
+   "desc": "Whether players can use flight on the server while in Survival mode by using mods. With allow-flight enabled, griefers may become more common, because it makes their work easier. In Creative mode, this has no effect.",
+   "env": "ALLOW_FLIGHT",
+   "options": [
+    {
+     "desc": "Flight is not allowed (players in air for at least 5 seconds get kicked).",
+     "value": "false"
+    },
+    {
+     "desc": "Flight is allowed, and used if the player has a fly mod installed.",
+     "value": "true"
+    }
+   ],
+   "type": "boolean"
+  },
+  "broadcast-console-to-ops": {
+   "default": "true",
+   "desc": "Whether to send console command outputs to all online operators.",
+   "env": "BROADCAST_CONSOLE_TO_OPS",
+   "options": [],
+   "type": "boolean"
+  },
+  "broadcast-rcon-to-ops": {
+   "default": "true",
+   "desc": "Whether to send rcon console command outputs to all online operators.",
+   "env": "BROADCAST_RCON_TO_OPS",
+   "options": [],
+   "type": "boolean"
+  },
+  "bug-report-link": {
+   "default": "blank",
+   "desc": "The URL for the report_bug server link. If empty, the link is not sent.",
+   "env": "BUG_REPORT_LINK",
+   "options": [],
+   "type": "string"
+  },
+  "chat-spam-threshold-seconds": {
+   "default": "10",
+   "desc": "Configures the mechanism that automatically kicks players for sending too many chat messages, decremented once per tick ( of a second). If set to 0, players will not be kicked.",
+   "env": null,
+   "options": [],
+   "type": "integer"
+  },
+  "command-spam-threshold-seconds": {
+   "default": "10",
+   "desc": "Configures the mechanism that automatically kicks players for sending too many commands, decremented once per tick ( of a second). If set to 0, players will not be kicked.",
+   "env": null,
+   "options": [],
+   "type": "integer"
+  },
+  "debug": {
+   "default": "",
+   "desc": "",
+   "env": null,
+   "options": [],
+   "type": "string"
+  },
+  "difficulty": {
+   "default": "easy",
+   "desc": "The difficulty (such as damage dealt by mobs and the way hunger and poison affects players) of the server. If a legacy difficulty number is specified, it is silently converted to a difficulty name.",
+   "env": "DIFFICULTY",
+   "options": [
+    {
+     "desc": "(0)",
+     "value": "peaceful"
+    },
+    {
+     "desc": "(1)",
+     "value": "easy"
+    },
+    {
+     "desc": "(2)",
+     "value": "normal"
+    },
+    {
+     "desc": "(3)",
+     "value": "hard"
+    }
+   ],
+   "type": "string"
+  },
+  "enable-code-of-conduct": {
+   "default": "false",
+   "desc": "Whether the server will look for code of conduct files in the codeofconduct subfolder in the server.properties folder. Each file in the folder should have the form <language_code>.txt. The server will then show the code of conduct matching the player's language. If the language doesn't exist, then en_us will be used. If neither exist, an arbitrary available entry will be used instead.",
+   "env": null,
+   "options": [],
+   "type": "boolean"
+  },
+  "enable-jmx-monitoring": {
+   "default": "false",
+   "desc": "Whether to expose an MBean with the Object name net.minecraft.server:type=Server and two attributes averageTickTime and tickTimes exposing the tick times in milliseconds. In order to enable JMX on the Java runtime you also need to use certain JVM flags: https://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html.",
+   "env": "ENABLE_JMX",
+   "options": [],
+   "type": "boolean"
+  },
+  "enable-query": {
+   "default": "false",
+   "desc": "Whether to enable query, which provides information about the server.",
+   "env": "ENABLE_QUERY",
+   "options": [],
+   "type": "boolean"
+  },
+  "enable-rcon": {
+   "default": "false",
+   "desc": "Whether to enable rcon, which allows access to the server console over a network. It's not recommended to connect to rcon via untrusted networks, like the internet, as it is not encrypted. All data sent between the client and the server (including the rcon password) can be intercepted. Ideally, only connect to rcon from localhost.",
+   "env": "ENABLE_RCON",
+   "options": [],
+   "type": "boolean"
+  },
+  "enable-status": {
+   "default": "true",
+   "desc": "Whether the server appears as \"online\" on the server list. If set to false, status replies to clients are suppressed. This means the server appears as offline, but still accepts connections.",
+   "env": "ENABLE_STATUS",
+   "options": [],
+   "type": "boolean"
+  },
+  "enforce-secure-profile": {
+   "default": "true",
+   "desc": "Whether to only allow players with a Mojang-signed public key to join the server. If this is not enabled, all chat messages will be left unsigned and unable to be reported. Clients will get warned about this when connecting to the server.",
+   "env": "ENFORCE_SECURE_PROFILE",
+   "options": [],
+   "type": "boolean"
+  },
+  "enforce-whitelist": {
+   "default": "false",
+   "desc": "Whether to enforce changes to the whitelist. When this option as well as the whitelist is enabled, players not present on the whitelist get kicked from the server after the server reloads the whitelist file.",
+   "env": "ENFORCE_WHITELIST",
+   "options": [
+    {
+     "desc": "Online players that are not on the whitelist are not kicked.",
+     "value": "false"
+    },
+    {
+     "desc": "Online players that are not on the whitelist are kicked.",
+     "value": "true"
+    }
+   ],
+   "type": "boolean"
+  },
+  "entity-broadcast-range-percentage": {
+   "default": "100",
+   "desc": "How close entities need to be to the player to be sent. Higher values means they'll be rendered from farther away, potentially causing more lag. This is expressed as a percentage. For example, setting to 50 makes entites only render at half the usual distance. This mimics the function on the client video settings (not unlike Render Distance, which the client can customize so long as it's under the server's setting).",
+   "env": "ENTITY_BROADCAST_RANGE_PERCENTAGE",
+   "options": [],
+   "type": "integer (10-1000)"
+  },
+  "force-gamemode": {
+   "default": "false",
+   "desc": "Whether to switch players to the default game mode on join.",
+   "env": "FORCE_GAMEMODE",
+   "options": [
+    {
+     "desc": "Players join in the game mode they left in.",
+     "value": "false"
+    },
+    {
+     "desc": "Players always join in the default game mode.",
+     "value": "true"
+    }
+   ],
+   "type": "boolean"
+  },
+  "function-permission-level": {
+   "default": "2",
+   "desc": "The default permission level for functions. See permission level for the details on the 4 levels.",
+   "env": "FUNCTION_PERMISSION_LEVEL",
+   "options": [],
+   "type": "integer (1-4)"
+  },
+  "gamemode": {
+   "default": "survival",
+   "desc": "The default game mode. If a legacy game mode number is specified, it is silently converted to a game mode name.",
+   "env": "MODE",
+   "options": [
+    {
+     "desc": "(0)",
+     "value": "survival"
+    },
+    {
+     "desc": "(1)",
+     "value": "creative"
+    },
+    {
+     "desc": "(2)",
+     "value": "adventure"
+    },
+    {
+     "desc": "(3)",
+     "value": "spectator"
+    }
+   ],
+   "type": "string"
+  },
+  "generate-structures": {
+   "default": "true",
+   "desc": "Whether structures (such as villages) are generated. Note: Dungeons still generate if this is set to false.",
+   "env": "GENERATE_STRUCTURES",
+   "options": [
+    {
+     "desc": "Structures are not generated in new chunks.",
+     "value": "false"
+    },
+    {
+     "desc": "Structures are generated in new chunks.",
+     "value": "true"
+    }
+   ],
+   "type": "boolean"
+  },
+  "generator-settings": {
+   "default": "{}",
+   "desc": "Settings used to customize world generation. Use depends on chosen level-type. For minecraft:flat, see Superflat#Multiplayer.",
+   "env": "GENERATOR_SETTINGS",
+   "options": [],
+   "type": "string"
+  },
+  "hardcore": {
+   "default": "false",
+   "desc": "Whether to enable hardcore mode on created worlds.",
+   "env": "HARDCORE",
+   "options": [],
+   "type": "boolean"
+  },
+  "hide-online-players": {
+   "default": "false",
+   "desc": "Whether to disable sending the player list on status requests.",
+   "env": "HIDE_ONLINE_PLAYERS",
+   "options": [],
+   "type": "boolean"
+  },
+  "initial-disabled-packs": {
+   "default": "blank",
+   "desc": "Datapacks to not be auto-enabled on world creation. Specified as a comma-separated list.",
+   "env": "INITIAL_DISABLED_PACKS",
+   "options": [],
+   "type": "string"
+  },
+  "initial-enabled-packs": {
+   "default": "vanilla",
+   "desc": "Datapacks to be enabled on world creation. Specified as a comma-separated list. Feature packs need to be explicitly enabled.",
+   "env": "INITIAL_ENABLED_PACKS",
+   "options": [],
+   "type": "string"
+  },
+  "level-name": {
+   "default": "world",
+   "desc": "The world name and the world directory path. If a directory at this path exists and is a valid world, it will be loaded by the server. Otherwise, the server will generate a new world in this directory (creating the directory and its parents if necessary) and use the provided value as its name. This can be both an absolute path, or a path relative to the working directory or the value of the --universe command line option if provided.",
+   "env": "LEVEL",
+   "options": [],
+   "type": "string"
+  },
+  "level-seed": {
+   "default": "blank",
+   "desc": "The seed for the generated world. A random seed is used if left blank.",
+   "env": "SEED",
+   "options": [],
+   "type": "string"
+  },
+  "level-type": {
+   "default": "minecraft:normal",
+   "desc": "The preset for the generated world. The vanilla namespace (minecraft:) can be omitted.",
+   "env": "LEVEL_TYPE",
+   "options": [
+    {
+     "desc": "Standard world with hills, valleys, water, etc.",
+     "value": "minecraft:normal"
+    },
+    {
+     "desc": "A flat world with no features. Can be modified with generator-settings.",
+     "value": "minecraft:flat"
+    },
+    {
+     "desc": "Same as default but all biomes are larger.",
+     "value": "minecraft:large_biomes"
+    },
+    {
+     "desc": "Same as default but world-generation height limit is increased.",
+     "value": "minecraft:amplified"
+    },
+    {
+     "desc": "A buffet world which the entire overworld consists of one biome. Can be modified with generator-settings.",
+     "value": "minecraft:single_biome_surface"
+    }
+   ],
+   "type": "string"
+  },
+  "log-ips": {
+   "default": "true",
+   "desc": "Whether to show client IP addresses in messages printed to the server console or the log file.",
+   "env": "LOG_IPS",
+   "options": [],
+   "type": "boolean"
+  },
+  "management-server-allowed-origins": {
+   "default": "",
+   "desc": "",
+   "env": "MANAGEMENT_SERVER_ALLOWED_ORIGINS",
+   "options": [],
+   "type": "string"
+  },
+  "management-server-enabled": {
+   "default": "false",
+   "desc": "Whether the Minecraft Server Management Protocol is enabled.",
+   "env": "MANAGEMENT_SERVER_ENABLED",
+   "options": [],
+   "type": "boolean"
+  },
+  "management-server-host": {
+   "default": "localhost",
+   "desc": "Controls the host that the Minecraft Server Management Protocol is started.",
+   "env": "MANAGEMENT_SERVER_HOST",
+   "options": [],
+   "type": "string"
+  },
+  "management-server-port": {
+   "default": "0",
+   "desc": "Controls the port that the Minecraft Server Management Protocol is started.",
+   "env": "MANAGEMENT_SERVER_PORT",
+   "options": [],
+   "type": "integer"
+  },
+  "management-server-secret": {
+   "default": "blank",
+   "desc": "Allows for clients to supply an Authorization header with a server specific secret, which is forty alphanumeric characters long (A-Z, a-z, and 0-9). The secret is automatically generated if the property is left empty.",
+   "env": "MANAGEMENT_SERVER_SECRET",
+   "options": [],
+   "type": "string"
+  },
+  "management-server-tls-enabled": {
+   "default": "true",
+   "desc": "Controls whether the Minecraft Server Management Protocol uses TLS (Transport Layer Security) or not.",
+   "env": "MANAGEMENT_SERVER_TLS_ENABLED",
+   "options": [],
+   "type": "boolean"
+  },
+  "management-server-tls-keystore": {
+   "default": "blank",
+   "desc": "Controls the path to the keystore file used for TLS. A server will not start if TLS is enabled and no keystore is provided.",
+   "env": "MANAGEMENT_SERVER_TLS_KEYSTORE",
+   "options": [],
+   "type": "string"
+  },
+  "management-server-tls-keystore-password": {
+   "default": "blank",
+   "desc": "Controls the password to the keystore file used for TLS. The password can be done through an environment variable (MINECRAFT_MANAGEMENT_TLS_KEYSTORE_PASSWORD), a Java Virtual Machine argument ({{cd|-Dmanagement.tls.keystore.password}}), or through this server property.",
+   "env": "MANAGEMENT_SERVER_TLS_KEYSTORE_PASSWORD",
+   "options": [],
+   "type": "string"
+  },
+  "max-chained-neighbor-updates": {
+   "default": "1000000",
+   "desc": "The limit of consecutive neighbor updates before skipping additional ones. Negative values disable the limit.",
+   "env": "MAX_CHAINED_NEIGHBOR_UPDATES",
+   "options": [],
+   "type": "integer"
+  },
+  "max-players": {
+   "default": "20",
+   "desc": "The maximum number of players that can play on the server at the same time. Ops with bypassesPlayerLimit enabled can join the server even if the server is full. Extremely large values for this field result in the client-side user list being broken.",
+   "env": "MAX_PLAYERS",
+   "options": [],
+   "type": "integer (0-(2^31 - 1))"
+  },
+  "max-tick-time": {
+   "default": "60000",
+   "desc": "The maximum number of milliseconds a single tick may take. After this limit is exceeded, the server watchdog stops the server with the message, A single server tick took 60.00 seconds (should be max 0.05); Considering it to be crashed, server will forcibly shutdown. and exits with an exit code of 1.",
+   "env": "MAX_TICK_TIME",
+   "options": [
+    {
+     "desc": "disable watchdog entirely",
+     "value": "-1"
+    }
+   ],
+   "type": "integer (-1 or 0–(2^63 - 1))"
+  },
+  "max-world-size": {
+   "default": "29999984",
+   "desc": "The amount of blocks from the center of the world where the world border appears. Setting the world border bigger causes the commands to complete successfully but the actual border does not move past this block limit. Setting the max-world-size higher than the default doesn't do anything.",
+   "env": "MAX_WORLD_SIZE",
+   "options": [],
+   "type": "integer (1-29999984)"
+  },
+  "motd": {
+   "default": "A Minecraft Server",
+   "desc": "The message displayed in the server list of the client, below the server name. *The MOTD supports color and formatting codes. *The MOTD supports non-ASCII characters, such as \"♥\". *If the MOTD is over 59 characters, the server list may report a communication error.",
+   "env": "MOTD",
+   "options": [],
+   "type": "string"
+  },
+  "network-compression-threshold": {
+   "default": "256",
+   "desc": "How big should a packet be to be compressed. Packets the size of this many bytes or more will be compressed. A lower threshold will compress more packets, but compressing small amounts of data might end up with a larger result than the source. Note: The Ethernet spec requires that packets less than 64 bytes become padded to 64 bytes. Thus, setting a value lower than 64 may not be beneficial. It is also not recommended to exceed the MTU, typically 1500 bytes.",
+   "env": "NETWORK_COMPRESSION_THRESHOLD",
+   "options": [
+    {
+     "desc": "disable compression entirely",
+     "value": "-1"
+    },
+    {
+     "desc": "compress everything",
+     "value": "0"
+    }
+   ],
+   "type": "integer"
+  },
+  "online-mode": {
+   "default": "true",
+   "desc": "Whether to only allow players verified with the Minecraft account database to join. This variable should only be set to false when the server is not connected to the Internet; hackers with fake accounts can connect if this is set to false. If minecraft.net is down or inaccessible, no players can connect if this is set to true. Setting this variable to off purposely is called \"cracking\" a server, and servers that are present with online mode off are called \"cracked\" servers, allowing players with unlicensed copies of Minecraft to join.",
+   "env": "ONLINE_MODE",
+   "options": [
+    {
+     "desc": "Enabled. The server assumes it has an Internet connection and checks every connecting player.",
+     "value": "true"
+    },
+    {
+     "desc": "Disabled. The server does not attempt to check connecting players.",
+     "value": "false"
+    }
+   ],
+   "type": "boolean"
+  },
+  "op-permission-level": {
+   "default": "4",
+   "desc": "The default permission level for ops when using .",
+   "env": "OP_PERMISSION_LEVEL",
+   "options": [],
+   "type": "integer (0-4)"
+  },
+  "pause-when-empty-seconds": {
+   "default": "60",
+   "desc": "How many seconds have to pass after no player has been online before the server is paused.",
+   "env": "PAUSE_WHEN_EMPTY_SECONDS",
+   "options": [],
+   "type": "integer"
+  },
+  "player-idle-timeout": {
+   "default": "0",
+   "desc": "How many minutes does the player have to idle to be kicked from the server. If set to 0, idle players are never kicked. :*Player Action :*Use Item :*Use Item On :*Set Held Item :*Chat Message :*Swing Arm :*Interact :*Click Container :*Click Container Button :*Place Recipe :*Update Sign",
+   "env": "PLAYER_IDLE_TIMEOUT",
+   "options": [
+    {
+     "desc": "Idle time is reset when the server receives one of the following packets:",
+     "value": "Note:"
+    }
+   ],
+   "type": "integer"
+  },
+  "prevent-proxy-connections": {
+   "default": "false",
+   "desc": "Whether to kick players if the ISP/AS sent from the server is different from the one from Mojang Studios' authentication server.",
+   "env": "PREVENT_PROXY_CONNECTIONS",
+   "options": [],
+   "type": "boolean"
+  },
+  "query.port": {
+   "default": "25565",
+   "desc": "The UDP port number query (see enable-query) listens on.",
+   "env": "QUERY_PORT",
+   "options": [],
+   "type": "integer (1-(2^16 - 2))"
+  },
+  "rate-limit": {
+   "default": "0",
+   "desc": "The maximum amount of packets a player can send before getting kicked. Setting to 0 disables this feature.",
+   "env": "RATE_LIMIT",
+   "options": [],
+   "type": "integer"
+  },
+  "rcon.password": {
+   "default": "blank",
+   "desc": "The password for rcon. If the password is blank and rcon is enabled, it will not start as a safeguard.",
+   "env": "RCON_PASSWORD",
+   "options": [],
+   "type": "string"
+  },
+  "rcon.port": {
+   "default": "25575",
+   "desc": "The TCP port number rcon listens on.",
+   "env": "RCON_PORT",
+   "options": [],
+   "type": "integer (1-(2^16 - 2))"
+  },
+  "region-file-compression": {
+   "default": "deflate",
+   "desc": "The algorithm used for compressing chunks in regions. Can be deflate, lz4, or none. Chunks are not automatically recompressed when changed.",
+   "env": "REGION_FILE_COMPRESSION",
+   "options": [],
+   "type": "string"
+  },
+  "require-resource-pack": {
+   "default": "false",
+   "desc": "Whether players are disconnected if they decline to use the resource pack.",
+   "env": "RESOURCE_PACK_ENFORCE",
+   "options": [],
+   "type": "boolean"
+  },
+  "resource-pack": {
+   "default": "blank",
+   "desc": "The resource pack download URL. The player may choose to download the resource pack when joining. If this is empty, no resource pack is provided. The resource pack may not be larger than 250 MiB. Note that download success or failure is logged by the client, and not by the server.",
+   "env": "RESOURCE_PACK",
+   "options": [],
+   "type": "string"
+  },
+  "resource-pack-id": {
+   "default": "blank",
+   "desc": "An optional UUID for the resource pack set by resource-pack to identify the pack with clients.",
+   "env": "RESOURCE_PACK_ID",
+   "options": [],
+   "type": "uuid in hyphenated hexadecimal format"
+  },
+  "resource-pack-prompt": {
+   "default": "blank",
+   "desc": "A custom message to be shown on resource pack prompt when require-resource-pack is used. Can be left empty for a default message. Expects chat component syntax, can contain multiple lines.",
+   "env": "RESOURCE_PACK_PROMPT",
+   "options": [],
+   "type": "string"
+  },
+  "resource-pack-sha1": {
+   "default": "blank",
+   "desc": "An optional SHA-1 digest of the resource pack, in lowercase hexadecimal. It is recommended to specify this, because it is used to verify the integrity of the resource pack. Note: If the resource pack is any different, a yellow message \"Invalid sha1 for resource-pack-sha1\" appears in the console when the server starts.",
+   "env": "RESOURCE_PACK_SHA1",
+   "options": [],
+   "type": "string"
+  },
+  "server-ip": {
+   "default": "blank",
+   "desc": "The IP address the server listens on. If empty, the server listens on all available IP addresses. It is recommended to leave this empty.",
+   "env": "SERVER_IP",
+   "options": [],
+   "type": "string"
+  },
+  "server-port": {
+   "default": "25565",
+   "desc": "The TCP port number the server listens on. This port must be forwarded if the server is hosted in a network using NAT (if the player has a home router/firewall).",
+   "env": "SERVER_PORT",
+   "options": [],
+   "type": "integer (1-(2^16 - 2))"
+  },
+  "simulation-distance": {
+   "default": "10",
+   "desc": "The maximum distance from players that living entities may be located in order to be updated by the server, measured in chunks in each direction of the player (radius, not diameter). If entities are outside of this radius, then they are not ticked by the server and they are not visible to players. 10 is the default/recommended. If the player has major lag, this value is recommended to be reduced.",
+   "env": "SIMULATION_DISTANCE",
+   "options": [],
+   "type": "integer (3-32)"
+  },
+  "spawn-protection": {
+   "default": "16",
+   "desc": "The side length of the square spawn protection area as 2x+1. Setting this to 0 disables the spawn protection. A value of 1 protects a 3×3 square centered on the spawn point. 2 protects 5×5, 3 protects 7×7, etc. This option is not generated on the first server start and appears when the first player joins. If there are no ops set on the server, the spawn protection is disabled automatically as well.",
+   "env": "SPAWN_PROTECTION",
+   "options": [],
+   "type": "integer"
+  },
+  "status-heartbeat-interval": {
+   "default": "0",
+   "desc": "Controls the intervals in which the management server sends heartbeat notifications to connected clients. It is disabled by default.",
+   "env": "STATUS_HEARTBEAT_INTERVAL",
+   "options": [],
+   "type": "integer"
+  },
+  "sync-chunk-writes": {
+   "default": "true",
+   "desc": "Whether to enable synchronous chunk writes. This prevents data loss and corruption after a crash. This can slow down the server due to I/O slowdowns.",
+   "env": "SYNC_CHUNK_WRITES",
+   "options": [],
+   "type": "boolean"
+  },
+  "text-filtering-config": {
+   "default": "blank",
+   "desc": "Configuration for the chat filtering mechanism. Used internally by Realms, not announced by Mojang and likely not meant to be used outside it.",
+   "env": null,
+   "options": [],
+   "type": "string"
+  },
+  "text-filtering-version": {
+   "default": "0",
+   "desc": "The version of the configuration format used for text-filtering-config. Valid values are 0 and 1.",
+   "env": null,
+   "options": [],
+   "type": "integer"
+  },
+  "use-native-transport": {
+   "default": "true",
+   "desc": "Whether to use optimized packet sending/receiving on Linux.",
+   "env": "USE_NATIVE_TRANSPORT",
+   "options": [
+    {
+     "desc": "Enabled. Enable Linux packet sending/receiving optimization.",
+     "value": "true"
+    },
+    {
+     "desc": "Disabled. Disable Linux packet sending/receiving optimization.",
+     "value": "false"
+    }
+   ],
+   "type": "boolean"
+  },
+  "view-distance": {
+   "default": "10",
+   "desc": "The amount of world data the server sends the client, measured in chunks in each direction of the player (radius, not diameter). This determines the server-side viewing distance. 10 is the default/recommended. If the player has major lag, this value is recommended to be reduced.",
+   "env": "VIEW_DISTANCE",
+   "options": [],
+   "type": "integer (3-32)"
+  },
+  "white-list": {
+   "default": "true",
+   "desc": "Whether the whitelist is enabled. With a whitelist enabled, users not on the whitelist cannot connect. Intended for private servers, such as those for real-life friends or strangers carefully selected via an application process, for example. Note: Ops are automatically whitelisted, and there is no need to add them to the whitelist.",
+   "env": "WHITELIST_PROP",
+   "options": [
+    {
+     "desc": "No white list is used.",
+     "value": "false"
+    },
+    {
+     "desc": "The file whitelist.json is used to generate the white list.",
+     "value": "true"
+    }
+   ],
+   "type": "boolean"
+  }
+ }
+}

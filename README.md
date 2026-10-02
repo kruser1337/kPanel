@@ -1,0 +1,134 @@
+# <img src=".github/pickaxe.png" width="36" height="36" alt=""> kPanel
+
+[![tests](https://github.com/kruser1337/kPanel/actions/workflows/tests.yml/badge.svg)](https://github.com/kruser1337/kPanel/actions/workflows/tests.yml)
+[![latest release](https://img.shields.io/github/v/release/kruser1337/kPanel)](https://github.com/kruser1337/kPanel/releases/latest)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/kruser1337)
+
+A self-hosted Minecraft server with a web admin panel, as one `docker compose`
+stack. A Paper server, scheduled backups, a file manager, and a panel for the
+day-to-day: who's online, whitelist and bans, gamerules, every
+`server.properties` key, and the server log.
+
+Built for running a server for yourself and a few friends — not a hosting
+business. No multi-tenancy, no database, no user accounts.
+
+<img alt="The kPanel dashboard: players online, server health and world stats" src=".github/screenshots/dashboard.png">
+
+## What the panel does
+
+| Page | What you get |
+|---|---|
+| **Dashboard** | Online/offline, players, MOTD and icon, TPS, latency, CPU, memory, world size, newest backup — refreshed every 30 s |
+| **Players** | Whitelist add/remove, op/deop, kick, ban/pardon. Live over RCON: no restart |
+| **Gamerules** | All 58 gamerules, grouped and explained. Applied immediately |
+| **Logs** | The server log in a terminal pane, searchable, with the RCON polling noise hidden |
+| **Settings** | Every `server.properties` key with explanations. Optional — see below |
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Players: whitelist, ops, kicks and bans, live over RCON" src=".github/screenshots/players.png"></td>
+    <td width="50%"><img alt="Gamerules: every rule the server has, grouped and explained" src=".github/screenshots/gamerules.png"></td>
+  </tr>
+  <tr>
+    <td><img alt="Logs: the server log in a searchable terminal pane" src=".github/screenshots/logs.png"></td>
+    <td><img alt="Settings: every server.properties key, saved as a pull request" src=".github/screenshots/settings.png"></td>
+  </tr>
+</table>
+
+<sub>Screenshots use made-up data.</sub>
+
+## Quickstart
+
+You need Docker with Compose 2.24 or newer. Then:
+
+```bash
+git clone https://github.com/kruser1337/kPanel && cd kPanel
+docker compose up -d
+```
+
+That's all. No `.env`, no accounts:
+
+- **The panel** is at <http://localhost:8080>
+- **The file manager** is at <http://localhost:8081>
+- **Players** connect to this machine on port **25565**
+
+The whitelist is on, so before anyone can join, add them (yourself first) on
+the panel's **Players** page.
+
+The panel and file manager open **on this machine only**, so they need no login.
+To reach them from somewhere else, add one of the optional overlays below.
+
+## Optional extras
+
+| You want | Add | Needs |
+|---|---|---|
+| The panel from other devices on your network | `-f compose/lan.yml` | `KPANEL_BASIC_AUTH` and `FILES_PASSWORD` in `.env` |
+| The panel from anywhere, over HTTPS | `-f compose/tailscale.yml` | A Tailscale account; see [`docs/tailscale.md`](docs/tailscale.md) |
+| The **Settings** page (every `server.properties` key) | nothing extra | A fork of this repo and a GitHub token; see [Settings](#settings) |
+| Deploys on every merge | Coolify | See [`docs/coolify.md`](docs/coolify.md) |
+
+Overlays are added after the base file, e.g.
+
+```bash
+cp .env.example .env    # uncomment and fill in the lines you need
+docker compose -f docker-compose.yml -f compose/lan.yml up -d
+```
+
+**Passwords are enforced, not suggested.** `compose/lan.yml` publishes the panel
+and the file manager to your network, so compose refuses to start until both
+passwords are set, and the panel itself refuses to run without a login. A panel
+exposed by accident looks exactly like one that is working, so it must not be
+possible to get one by forgetting a line.
+
+## Settings
+
+Settings edits `server.properties` by opening a pull request against your own
+fork's `docker-compose.yml`, so git keeps the history and every change can be
+reviewed. Set `KPANEL_GITHUB_REPO` and `KPANEL_GITHUB_TOKEN` in `.env` (see
+[`.env.example`](.env.example)). Without them the page is simply hidden;
+everything else works without it.
+
+## What's in the stack
+
+| Container | Job |
+|---|---|
+| `mc` | Paper server ([`itzg/minecraft-server`](https://github.com/itzg/docker-minecraft-server)) |
+| `mc-backup` | Scheduled world backups, pruned to a fixed count |
+| `kpanel` | The panel. Python standard library plus PyYAML; no database |
+| `filebrowser` | [FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) over the world files |
+| `tailscale` | *Only with `compose/tailscale.yml`:* puts the panel and file manager on your tailnet |
+
+The panel reads the world read-only and talks to the server over RCON. It
+deliberately has **no access to the Docker socket** — that would expose every
+other container's environment on the host.
+
+## Status
+
+Running a real server daily, and still young — expect rough edges. Issues and
+pull requests are very welcome, as are "this was confusing" reports, which are
+usually the most useful kind.
+
+Day-to-day running (backups, restores, upgrades, troubleshooting) is in
+[`docs/operations.md`](docs/operations.md).
+
+## Licence
+
+MIT; see [`LICENSE`](LICENSE).
+
+`kpanel/favicon.png` is separate: the diamond pickaxe from Minetest Game by
+BlockMen, under **CC BY-SA 3.0** — attribution in
+[`kpanel/favicon.LICENSE.txt`](kpanel/favicon.LICENSE.txt). The MIT licence
+covers the code, not that image.
+`.github/pickaxe.png`, the icon next to the title, is the same image enlarged
+8× with nearest-neighbour scaling and otherwise unchanged; it is under the same
+CC BY-SA 3.0 licence.
+
+The panel's colours ([Radix Colors](https://github.com/radix-ui/colors)) and
+icons ([Tabler Icons](https://github.com/tabler/tabler-icons)) are MIT too,
+with their notices in [`kpanel/ui.LICENSE.txt`](kpanel/ui.LICENSE.txt).
+
+## Support
+
+kPanel is free and MIT licensed. If it saves you some time, you can
+[buy me a coffee](https://buymeacoffee.com/kruser1337).
