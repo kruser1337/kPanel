@@ -211,7 +211,9 @@ docker compose up -d --build
 
 **Minecraft / Paper:** the version is pinned in `docker-compose.yml`
 (`VERSION`, `PAPER_BUILD`, and `PAPER_CHANNEL` for beta builds). Never let it
-float: a restart could silently change the jar.
+float: a restart could silently change the jar. The default is the newest
+version with a stable build; a beta is worth it only if you accept the risks
+in the README's "Newer Minecraft versions".
 
 ```sh
 # newest builds for a version; "stable": null means beta builds only
