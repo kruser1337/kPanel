@@ -25,9 +25,12 @@ import yaml
 
 import app
 import compose_edit as ce
+import settings as st
 
 ROOT = pathlib.Path(__file__).parent.parent
-COMPOSE = (ROOT / "docker-compose.yml").read_text()
+# Git mode edits a fork of the base; there, panel PRs have already pinned some values.
+COMPOSE = ce.apply_changes((ROOT / "docker-compose.yml").read_text(),
+                           {"MOTD": "Hosted with kPanel", "DIFFICULTY": "normal", "MAX_PLAYERS": "8"})
 # A sanitised server.properties ships with the tests, so a fresh clone can run
 # them with no setup. PROPS_FIXTURE overrides it to test against a real file.
 FIXTURE = os.environ.get("PROPS_FIXTURE") or str(pathlib.Path(__file__).parent / "testdata" / "server.properties")
@@ -349,28 +352,84 @@ class App(unittest.TestCase):
         self.assertIn('href="/settings"', body)
         self.assertEqual(app.settings_mode(), "git")
 
-    def test_settings_is_hidden_and_explained_when_github_is_not_configured(self):
-        original = app.CFG["token"]
-        app.CFG["token"] = ""
-        try:
-            self.assertEqual(app.settings_mode(), "off")
-            _, home = self.get("/")
-            self.assertNotIn('href="/settings"', home)      # gone from the nav
-            status, body = self.get_raw("/settings")
-            self.assertEqual(status, 200)                    # explained, not a 502
-            self.assertIn("KPANEL_GITHUB_TOKEN", body)
-        finally:
-            app.CFG["token"] = original
+    def file_mode(self):
+        """No GitHub configured, on a copy of the fixture: the default setup."""
+        props = pathlib.Path(tempfile.mkdtemp()) / "server.properties"
+        props.write_text(pathlib.Path(FIXTURE).read_text())
+        saved = dict(app.CFG)
+        app.CFG.update(token="", props=str(props))
+        self.addCleanup(lambda: app.CFG.update(saved))
+        return props
 
-    def test_saving_is_refused_when_settings_are_off(self):
-        original = app.CFG["token"]
-        app.CFG["token"] = ""
-        try:
-            status, _ = self.post("/save", {"p:difficulty": "peaceful"})
-            self.assertEqual(status, 404)
-            self.assertEqual(FakeGitHub.opened, [])
-        finally:
-            app.CFG["token"] = original
+    def test_without_github_settings_writes_the_file(self):
+        self.file_mode()
+        self.assertEqual(app.settings_mode(), "file")
+        _, home = self.get("/")
+        self.assertIn('href="/settings"', home)              # not hidden behind a token
+        status, body = self.get()
+        self.assertEqual(status, 200)
+        self.assertIn('data-label="Save (N)"', body)
+        self.assertNotIn('action="/import"', body)           # no git to differ from
+
+    def test_file_mode_saves_only_the_changed_keys_and_opens_no_pr(self):
+        props = self.file_mode()
+        before = st.parse_properties(props.read_text())
+        status, body = self.post("/save", {
+            "p:difficulty": "peaceful" if before["difficulty"] != "peaceful" else "hard",
+            "p:max-players": before["max-players"],          # unchanged
+            "p:motd": "Grüße & hi",
+        })
+        self.assertEqual(status, 200, body[:500])
+        self.assertIn("Takes effect when the server restarts", body)
+        self.assertIn('action="/restart"', body)
+        after = st.parse_properties(props.read_text())
+        changed = {k for k in after if after[k] != before.get(k)}
+        self.assertEqual(changed, {"difficulty", "motd"})
+        self.assertEqual(after["motd"], "Grüße & hi")
+        self.assertEqual(after["rcon.password"], before["rcon.password"])  # secrets untouched
+        self.assertEqual(FakeGitHub.opened, [])
+
+    def test_file_mode_validation_errors_write_nothing(self):
+        props = self.file_mode()
+        before = props.read_text()
+        status, _ = self.post("/save", {"p:view-distance": "99"})
+        self.assertEqual(status, 400)
+        status, _ = self.post("/save", {"p:online-mode": "false"})   # locked
+        self.assertEqual(status, 400)
+        self.assertEqual(props.read_text(), before)
+
+    def test_file_mode_has_no_import(self):
+        self.file_mode()
+        status, _ = self.post("/import", {"i:spawn-protection": "0"})
+        self.assertEqual(status, 404)
+
+    def test_file_mode_before_the_first_start_explains_itself(self):
+        self.file_mode().unlink()
+        status, body = self.get_raw("/settings")
+        self.assertEqual(status, 502)
+        self.assertIn("first start", body)
+
+    def test_restart_stops_the_server_after_answering(self):
+        app.RESTART_DELAY, delay = 0, app.RESTART_DELAY
+        self.addCleanup(lambda: setattr(app, "RESTART_DELAY", delay))
+        status, body = self.post("/restart", {})
+        self.assertEqual(status, 200)
+        self.assertIn("Restarting", body)
+        self.assertIn('data-refresh="60"', body)
+        for _ in range(50):
+            if "stop" in FakeMinecraft.sent:
+                break
+            threading.Event().wait(0.02)
+        self.assertEqual(FakeMinecraft.sent, ["list", "stop"])
+
+    def test_restart_is_on_the_dashboard_and_asks_first(self):
+        _, body = self.get("/")
+        self.assertRegex(body, r'action="/restart"[^>]*data-confirm=')
+
+    def test_restart_cross_site_refused(self):
+        status, _ = self.post("/restart", {}, {"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 403)
+        self.assertEqual(FakeMinecraft.sent, [])
 
     def test_basic_auth_challenges_when_credentials_are_missing(self):
         app.CFG["basic_auth"] = "admin:hunter2"

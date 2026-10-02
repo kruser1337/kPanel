@@ -23,7 +23,7 @@ business. No multi-tenancy, no database, no user accounts.
 | **Players** | Whitelist add/remove, op/deop, kick, ban/pardon. Live over RCON: no restart |
 | **Gamerules** | All 58 gamerules, grouped and explained. Applied immediately |
 | **Logs** | The server log in a terminal pane, searchable, with the RCON polling noise hidden |
-| **Settings** | Every `server.properties` key with explanations. Optional — see below |
+| **Settings** | Every `server.properties` key with explanations, saved to the file; restart from the panel to apply |
 
 <table>
   <tr>
@@ -32,7 +32,7 @@ business. No multi-tenancy, no database, no user accounts.
   </tr>
   <tr>
     <td><img alt="Logs: the server log in a searchable terminal pane" src=".github/screenshots/logs.png"></td>
-    <td><img alt="Settings: every server.properties key, saved as a pull request" src=".github/screenshots/settings.png"></td>
+    <td><img alt="Settings: every server.properties key, saved straight to the file" src=".github/screenshots/settings.png"></td>
   </tr>
 </table>
 
@@ -65,7 +65,7 @@ To reach them from somewhere else, add one of the optional overlays below.
 |---|---|---|
 | The panel from other devices on your network | `-f compose/lan.yml` | `KPANEL_BASIC_AUTH` and `FILES_PASSWORD` in `.env` |
 | The panel from anywhere, over HTTPS | `-f compose/tailscale.yml` | A Tailscale account; see [`docs/tailscale.md`](docs/tailscale.md) |
-| The **Settings** page (every `server.properties` key) | nothing extra | A fork of this repo and a GitHub token; see [Settings](#settings) |
+| Settings changes as reviewed pull requests | nothing extra | A fork of this repo and a GitHub token; see [Settings](#settings) |
 | Deploys on every merge | Coolify | See [`docs/coolify.md`](docs/coolify.md) |
 
 Overlays are added after the base file, e.g.
@@ -83,11 +83,14 @@ possible to get one by forgetting a line.
 
 ## Settings
 
-Settings edits `server.properties` by opening a pull request against your own
-fork's `docker-compose.yml`, so git keeps the history and every change can be
-reviewed. Set `KPANEL_GITHUB_REPO` and `KPANEL_GITHUB_TOKEN` in `.env` (see
-[`.env.example`](.env.example)). Without them the page is simply hidden;
-everything else works without it.
+Settings writes `server.properties` directly. Change values, **Save**, then
+**Restart now**: Minecraft reads the file only at startup.
+
+If you'd rather keep settings in git, fork this repository and set
+`KPANEL_GITHUB_REPO` and `KPANEL_GITHUB_TOKEN` in `.env` (see
+[`.env.example`](.env.example)). Settings then opens a pull request against
+your fork's `docker-compose.yml` instead of writing the file, so every change
+is reviewed and kept in history.
 
 ## What's in the stack
 
@@ -99,7 +102,7 @@ everything else works without it.
 | `filebrowser` | [FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) over the world files |
 | `tailscale` | *Only with `compose/tailscale.yml`:* puts the panel and file manager on your tailnet |
 
-The panel reads the world read-only and talks to the server over RCON. It
+The panel writes only `server.properties` and talks to the server over RCON. It
 deliberately has **no access to the Docker socket** — that would expose every
 other container's environment on the host.
 

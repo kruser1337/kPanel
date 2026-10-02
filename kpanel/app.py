@@ -1,11 +1,14 @@
-"""kPanel: dashboard, server settings by PR, players and gamerules live.
+"""kPanel: dashboard, server settings, players and gamerules live.
 
 Two kinds of change, two paths:
 
 * server.properties (Settings): Minecraft reads it only at startup, so a change
-  needs a restart anyway. The panel never writes it: it opens a PR that edits
-  the compose file (COMPOSE_PATH), and merging deploys it. Git stays the single
-  source of truth; edits made on the server show up as importable differences.
+  takes effect on the next restart, which the panel can do (RCON stop; the
+  restart policy brings the server back). Two modes, see settings_mode():
+  by default the panel writes the file itself. With a GitHub fork configured it
+  never writes it: it opens a PR that edits the compose file (COMPOSE_PATH), and
+  merging deploys it. Git is then the single source of truth; edits made on the
+  server show up as importable differences.
 * Whitelist, ops, kicks (Players) and gamerules (Gamerules) are live server
   state, sent over RCON: immediate, no restart, no git. whitelist.json and
   ops.json on the server are the only source of truth for players.
@@ -169,6 +172,53 @@ def load():
             "live_only": unpinned and lv is not None and st.normalize(p, lv) != st.normalize(p, default),
         }
     return gh, commit, text, blob, rows, gh.open_panel_prs()
+
+
+def load_file():
+    """The Settings rows in file mode: server.properties is the only source."""
+    try:
+        with open(CFG["props"], encoding="utf-8") as f:
+            live = st.parse_properties(f.read())
+    except FileNotFoundError:
+        raise OSError("No server.properties yet: the server writes it on its first start.") from None
+    rows = {}
+    for key, p in st.PROPS.items():
+        default = "" if p.default.lower() in UNSET_DEFAULTS else p.default
+        lv = live.get(key)
+        rows[key] = {"p": p, "git": None, "source": None, "live": lv,
+                     "value": lv if lv is not None else default, "drift": False, "live_only": False}
+    return rows
+
+
+def save_file(wanted: dict, who: str):
+    """Write the validated values into server.properties, atomically."""
+    path = CFG["props"]
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    new = st.write_properties(text, wanted)
+    tmp = f"{path}.kpanel-tmp"
+    with open(tmp, "w", encoding="ascii") as f:
+        f.write(new)
+    os.chmod(tmp, os.stat(path).st_mode & 0o777)
+    os.replace(tmp, path)  # never a half-written file, even if the panel dies mid-save
+    for k, v in sorted(wanted.items()):
+        record(who, f"set {k}={v}", "saved to server.properties")
+
+
+RESTART_DELAY = 1.0  # seconds: lets the response reach the browser first
+
+
+def restart(who):
+    """Stop the server; restart: unless-stopped starts it again.
+
+    The panel shares mc's process namespace (pid: service:mc), so it goes down
+    with the server and comes back once it is up. That is why the stop is sent
+    after the response, not before it.
+    """
+    c = client()
+    c.command("list")  # fail now, with a readable error, if RCON is unreachable
+    record(who, "stop", "restarting")
+    threading.Timer(RESTART_DELAY, lambda: _safe(lambda: c.command("stop"))).start()
 
 
 def make_pr(gh, commit, text, blob, rows, wanted: dict, who: str, why: str) -> str:
@@ -387,13 +437,15 @@ if(!/^(localhost|127\\.0\\.0\\.1|\\[::1\\])$/.test(location.hostname))document.q
 """
 
 def settings_mode():
-    """"git" when the panel can open PRs, otherwise "off".
+    """"git" when the panel can open PRs, otherwise "file".
 
-    Settings is the only page that needs GitHub; the dashboard, players,
-    gamerules and logs need nothing but RCON and /data. So a panel with no
-    token is still fully useful, and the page is hidden rather than broken.
+    "file", the default: the panel writes server.properties directly. That only
+    sticks for keys the compose leaves unset, because the image rewrites every
+    key it has a variable for on each start; the base compose sets none of the
+    editable ones. "git": changes become PRs against the compose, for setups
+    where git is the source of truth (opt-in, needs a fork and a token).
     """
-    return "git" if CFG["token"] and CFG["repo"] else "off"
+    return "git" if CFG["token"] and CFG["repo"] else "file"
 
 
 def require_auth_boundary(basic_auth, allow_no_auth):
@@ -416,12 +468,8 @@ ALL_NAV = [("/", "Dashboard"), ("/settings", "Settings"), ("/players", "Players"
        ("/gamerules", "Gamerules"), ("/logs", "Logs")]
 
 
-def nav_items():
-    return [(h, t) for h, t in ALL_NAV if h != "/settings" or settings_mode() != "off"]
-
-
 def head(active, filter_placeholder="", refresh=0):
-    links = "".join(f'<a href="{h}"{" class=on" if h == active else ""}>{t}</a>' for h, t in nav_items())
+    links = "".join(f'<a href="{h}"{" class=on" if h == active else ""}>{t}</a>' for h, t in ALL_NAV)
     files = (f'<a href="{e(CFG["files_url"])}">Files {ui.icon("external-link")}</a>'
              if CFG["files_url"] else "")
     q = (f'<input id="q" type=search placeholder="{e(filter_placeholder)}" aria-label="Filter" autocomplete="off">'
@@ -499,8 +547,8 @@ def tps_tone(tps):
 BACKUP_STALE = 26 * 3600  # backups run every 12 h; past a day, two were missed
 
 
-def dashboard_page(s):
-    out = [head("/", refresh=30)]
+def dashboard_page(s, err=""):
+    out = [head("/", refresh=30), banners("", err)]
     p = s["ping"]
     icon = (p or {}).get("favicon") or PAPER_ICON
     px = " px" if (p or {}).get("favicon") else ""  # real 64x64 server icons are pixel art
@@ -510,7 +558,7 @@ def dashboard_page(s):
     addr = f'{CFG["public_host"]}' + ("" if CFG["public_port"] == 25565 else f':{CFG["public_port"]}')
     ip = f' <span>({e(s["ip"])})</span>' if s["ip"] else ""
     meta = (f'<div class=meta><span title="Address players connect to">Address <code>{e(addr)}</code>{ip}</span>'
-            f'<span>Version <code>{e(p["version"]) if p else "—"}</code></span></div>')
+            f'<span>Version <code>{e(p["version"]) if p else "—"}</code></span>{restart_form()}</div>')
     if p:
         status = '<span class="status up" title="answers the server-list ping">Online</span>'
         motd = f'<div class=motd><span class=tag>MOTD</span> {e(p["motd"])}</div>' if p["motd"] else ""
@@ -618,9 +666,30 @@ def page(rows, prs, msg="", err=""):
             out.append(f'<tr data-k="{e(k)} {e(p.desc.lower()[:200])}"><td class=k>'
                        f'<code title="{e(_tip(p))}">{e(k)}</code>{badge}</td><td>{field(r)}</td></tr>')
         out.append("</table></section>")
-    out.append('<div class=bar><button class=go data-label="Open PR (N)" data-idle="No changes" '
-               'title="Merging the PR redeploys and restarts the server" disabled>No changes</button></div></form>')
+    if settings_mode() == "git":
+        go = ('data-label="Open PR (N)" data-idle="No changes" '
+              'title="Merging the PR redeploys and restarts the server"')
+    else:
+        go = 'data-label="Save (N)" data-idle="No changes" title="Takes effect when the server restarts"'
+    out.append(f'<div class=bar><button class=go {go} disabled>No changes</button></div></form>')
     return "".join(out) + foot(WIKI_CREDIT)
+
+
+RESTART_CONFIRM = "Restart the server? Everyone online is disconnected for about a minute."
+
+
+def restart_form(label="Restart server"):
+    return (f'<form method=post action="/restart" style="display:inline" data-confirm="{e(RESTART_CONFIRM)}">'
+            f'<button class=sec title="Saves the world, stops the server, and starts it again">'
+            f'{e(label)}</button></form>')
+
+
+def restarting_page():
+    # The panel restarts with the server, so the reload has to wait for both.
+    out = [head("/", refresh=60), banners(
+        "Restarting. The server saves the world and starts again, which takes about a minute; "
+        "the panel restarts with it and this page reloads itself.", "")]
+    return "".join(out) + foot()
 
 
 # --- players (live) -------------------------------------------------------------
@@ -784,8 +853,7 @@ RCON_NOISE = re.compile(r"\[RCON (?:Client|Listener)")
 def read_log(hide_rcon=True, limit=LOG_TAIL):
     """The newest lines of the server's own log, or None if there is no log yet.
 
-    Read-only by construction: /data is mounted ro and the name is fixed, so
-    there is no path for a caller to traverse out of.
+    The name is fixed, so there is no path for a caller to traverse out of.
     """
     try:
         with open(os.path.join(CFG["data"], "logs", "latest.log"),
@@ -812,20 +880,6 @@ def logs_page(lines, hide_rcon):
         cls = " class=warn" if "/WARN]" in ln else (" class=err" if "/ERROR]" in ln else "")
         out.append(f'<tr data-k="{e(ln.lower()[:200])}"><td><code{cls}>{e(ln)}</code></td></tr>')
     out.append("</table></div></div>")
-    return "".join(out) + foot()
-
-
-def settings_off_page():
-    out = [head("/settings"), '<div class=card><h2>Settings</h2>',
-           "<p>Settings edits <code>server.properties</code> values by opening a pull "
-           "request against the compose file, so it needs a GitHub repository and a "
-           "token. Neither is configured, so the page is off and hidden from the nav.</p>"
-           "<p>To turn it on, set <code>KPANEL_GITHUB_REPO</code> (e.g. "
-           "<code>you/your-fork</code>) and <code>KPANEL_GITHUB_TOKEN</code> (a "
-           "fine-grained PAT for that repo: Contents and Pull requests, read and "
-           "write), then redeploy.</p>"
-           "<p class=muted>Everything else works without it: the dashboard, players, "
-           "gamerules and logs need only RCON and the data volume.</p></div>"]
     return "".join(out) + foot()
 
 
@@ -898,10 +952,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(502, gamerules_page(None, err=str(ex)))
         if path != "/settings":
             return self._send(404, "not found", "text/plain")
-        if settings_mode() == "off":
-            return self._send(200, settings_off_page())
         try:
-            _, _, _, _, rows, prs = load()
+            rows, prs = load()[4:] if settings_mode() == "git" else (load_file(), [])
         except (GitHubError, OSError, KeyError, yaml.YAMLError) as ex:
             return self._send(502, page({}, [], err=str(ex)))
         self._send(200, page(rows, prs))
@@ -913,9 +965,9 @@ class Handler(BaseHTTPRequestHandler):
         # so another page open in your browser can't act through this panel.
         if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
             return self._send(403, "cross-site request refused", "text/plain")
-        if self.path not in ("/save", "/import", "/players", "/gamerules"):
+        if self.path not in ("/save", "/import", "/players", "/gamerules", "/restart"):
             return self._send(404, "not found", "text/plain")
-        if self.path in ("/save", "/import") and settings_mode() == "off":
+        if self.path == "/import" and settings_mode() != "git":
             return self._send(404, "not found", "text/plain")
         n = int(self.headers.get("Content-Length") or 0)
         form = {k: v[0] for k, v in parse_qs(self.rfile.read(min(n, 200_000)).decode(),
@@ -929,6 +981,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, players_page(_safe(players_state), err=str(ex)))
             except RconError as ex:
                 return self._send(502, players_page(None, err=str(ex)))
+        if self.path == "/restart":
+            try:
+                restart(who)
+            except RconError as ex:
+                return self._send(502, dashboard_page(dashboard_state(), err=f"Could not restart: {ex}"))
+            return self._send(200, restarting_page())
         if self.path == "/gamerules":
             try:
                 values, msg = do_gamerules(form, who)
@@ -937,8 +995,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, gamerules_page(_safe(lambda: gr.current(client())), err=str(ex)))
             except RconError as ex:
                 return self._send(502, gamerules_page(None, err=str(ex)))
+        git = settings_mode() == "git"
         try:
-            gh, commit, text, blob, rows, prs = load()
+            gh, commit, text, blob, rows, prs = load() if git else (None, None, None, None, load_file(), [])
             wanted, errors = {}, []
             prefix = "p:" if self.path == "/save" else "i:"
             for name, raw in form.items():
@@ -960,10 +1019,16 @@ class Handler(BaseHTTPRequestHandler):
             if errors:
                 return self._send(400, page(rows, prs, err="; ".join(errors)))
             if not wanted:
-                return self._send(200, page(rows, prs, msg="Nothing changed, so no PR was opened."))
+                return self._send(200, page(rows, prs, msg="Nothing changed, so no PR was opened." if git
+                                            else "Nothing changed."))
+            if not git:
+                save_file(wanted, who)
+                names = ", ".join(f"<code>{e(k)}</code>" for k in sorted(wanted))
+                return self._send(200, page(load_file(), [], msg=(
+                    f"Saved {names}. Takes effect when the server restarts. {restart_form('Restart now')}")))
             url = make_pr(gh, commit, text, blob, rows, wanted, who,
                           "set" if self.path == "/save" else "import from server")
-        except (GitHubError, ce.ComposeEditError, OSError, KeyError, yaml.YAMLError) as ex:
+        except (GitHubError, ce.ComposeEditError, OSError, KeyError, ValueError, yaml.YAMLError) as ex:
             return self._send(502, page({}, [], err=str(ex)))
         self._send(200, page(rows, prs + [(0, "just opened", url)],
                              msg=f'PR opened: <a href="{e(url)}">{e(url)}</a>'))

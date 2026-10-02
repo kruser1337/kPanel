@@ -56,17 +56,31 @@ RCON chatter* brings them back. Commands someone actually ran are never hidden.
 This is the Minecraft server's log only. For the other containers, use
 `docker compose logs <service>`.
 
-### Settings (optional)
+### Settings
 
 Every `server.properties` key, grouped and searchable, with dropdowns and
-range-checked numbers. Hover a key for its description. Needs a fork of this
-repository and a GitHub token (see [`.env.example`](../.env.example)); without
-them the page is hidden.
+range-checked numbers. Hover a key for its description.
 
 1. Change values. Changed rows are highlighted and the button counts them.
-2. **Open PR.** The panel edits `docker-compose.yml` on a new branch and opens
-   a pull request listing every change. It never writes to the server.
-3. **Merge**, pull, and restart: `git pull && docker compose up -d`. Merge when
+2. **Save.** The panel writes the changed keys to `server.properties` and
+   leaves every other line as it was.
+3. **Restart now.** Minecraft reads the file only at startup. The button (also
+   on the dashboard) saves the world, stops the server, and Docker starts it
+   again, about a minute. The panel restarts with it and reloads itself.
+
+**A key the compose sets wins.** The image rewrites every key it has a variable
+for on each start, so the base compose sets none of the editable ones. If you
+add one, say `DIFFICULTY:`, the panel's edits to `difficulty` are undone on the
+next restart.
+
+#### Through git instead (optional)
+
+If your setup lives in git, set `KPANEL_GITHUB_REPO` and `KPANEL_GITHUB_TOKEN`
+(see [`.env.example`](../.env.example)). Settings then never writes the file:
+
+1. **Open PR.** The panel edits `docker-compose.yml` on a new branch and opens
+   a pull request listing every change.
+2. **Merge**, pull, and restart: `git pull && docker compose up -d`. Merge when
    nobody is online; the server restarts.
 
 Not editable from the panel, on purpose:
@@ -78,9 +92,9 @@ Not editable from the panel, on purpose:
   by hand, deliberately.
 - **Values taken from a variable** (`${…}`) are locked too; change the variable.
 
-If `server.properties` is changed outside the panel (the file manager, a plugin),
-Settings lists the keys whose live value differs from git, and can pin the ones
-you keep with a pull request. In-game commands like `/difficulty` change the
+In git mode, if `server.properties` is changed outside the panel (the file
+manager, a plugin), Settings lists the keys whose live value differs from git,
+and can pin the ones you keep with a pull request. In-game commands like `/difficulty` change the
 running server, not the file, so they don't show up.
 
 ## Server commands (`rcon-cli`)
@@ -95,21 +109,22 @@ docker compose exec mc rcon-cli           # interactive; `exit` to leave
 Commands over RCON take no leading `/`. Useful ones: `whitelist list`,
 `op <name>`, `say <text>`, `save-all flush`, `seed`, `version`.
 
-Don't use `stop` to restart: `restart: unless-stopped` brings the server
-straight back. Use `docker compose restart mc`.
+`stop` doesn't keep the server down: `restart: unless-stopped` brings it
+straight back, which is how the panel's Restart button works. To shut it down,
+use `docker compose stop mc`.
 
 ## What lives where
 
 | What | Change it in |
 |---|---|
-| `server.properties` keys | The Settings page, or the `mc` environment in `docker-compose.yml` |
+| `server.properties` keys | The Settings page, then restart |
 | Gamerules (PvP, keep inventory, mob griefing, …) | The Gamerules page, or `rcon-cli gamerule <rule> <value>` |
 | Paper / Spigot config (`config/paper-*.yml`, `spigot.yml`, `bukkit.yml`) | The file manager, then `docker compose restart mc` |
 | Plugin config (`plugins/<Plugin>/config.yml`) | The file manager, then reload or restart |
 | Version, memory, plugin list | `docker-compose.yml` |
 
-**A key the compose sets is rewritten on every start**, so a hand edit to it in
-`server.properties` is undone. Change the compose instead.
+**A key the compose sets is rewritten on every start**, so an edit to it in
+`server.properties` is undone. Remove it from the compose, or change it there.
 
 ## Plugins
 
@@ -226,7 +241,7 @@ from before the upgrade. The Java version comes from the image tag
 | Players can't connect | Is 25565 open in the host's firewall, and forwarded on your router for players outside your network? `nc -z <host> 25565` from outside |
 | "You are not white-listed on this server" | Add them on the Players page, or `rcon-cli whitelist add <name>` |
 | Players or Gamerules page shows an RCON error | The server is still starting (wait ~30 s), or it is down: `docker compose ps` |
-| A setting change didn't stick | The compose sets that key, and rewrites it on every start. Change it there |
+| A setting change didn't stick | It needs a restart. Or the compose sets that key, and rewrites it on every start: remove it there |
 | Log says `Server empty for 60 seconds, pausing` | Normal: Minecraft's own pause. It resumes when someone joins |
 | Boot fails: `No build found for version … with channel 'default'` | A beta build is pinned without `PAPER_CHANNEL: "experimental"` |
 | Boot fails: `UnsupportedClassVersionError` | Wrong Java: the image tag must be `stable-java25` or newer |

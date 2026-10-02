@@ -234,22 +234,63 @@ def parse_properties(text: str) -> dict:
     """
     out = {}
     for line in text.splitlines():
-        line = line.strip()
-        if not line or line[0] in "#!":
-            continue
-        i, key = 0, []
-        while i < len(line):
-            c = line[i]
-            if c == "\\" and i + 1 < len(line):
-                key.append(line[i:i + 2])
-                i += 2
-                continue
-            if c in "=:":
-                break
-            key.append(c)
-            i += 1
-        out[_unescape("".join(key).strip())] = _unescape(line[i + 1:].lstrip() if i < len(line) else "")
+        kv = _split(line)
+        if kv:
+            out[kv[0]] = kv[1]
     return out
+
+
+def _split(line):
+    """(key, value) of one properties line, or None for a blank or comment line."""
+    line = line.strip()
+    if not line or line[0] in "#!":
+        return None
+    i, key = 0, []
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            key.append(line[i:i + 2])
+            i += 2
+            continue
+        if c in "=:":
+            break
+        key.append(c)
+        i += 1
+    return _unescape("".join(key).strip()), _unescape(line[i + 1:].lstrip() if i < len(line) else "")
+
+
+def write_properties(text: str, wanted: dict) -> str:
+    """`text` with each wanted key set, every other line (secrets, comments) untouched.
+
+    Written the way Minecraft writes it, ASCII with \\uXXXX escapes, so it reads
+    back the same whatever charset the server opens it with. Verified by parsing
+    the result: raises ValueError rather than ever writing something unverified.
+    """
+    lines, done = text.splitlines(), set()
+    for i, line in enumerate(lines):
+        kv = _split(line)
+        if kv and kv[0] in wanted:
+            lines[i] = f"{kv[0]}={_escape(wanted[kv[0]])}"
+            done.add(kv[0])
+    lines += [f"{k}={_escape(v)}" for k, v in sorted(wanted.items()) if k not in done]
+    out = "\n".join(lines) + "\n"
+    if parse_properties(out) != {**parse_properties(text), **wanted}:
+        raise ValueError("server.properties did not read back as written; nothing was saved")
+    return out
+
+
+def _escape(v: str) -> str:
+    out = []
+    for c in v:
+        if c in "\\:=":
+            out.append("\\" + c)
+        elif " " <= c <= "~":
+            out.append(c)
+        else:  # Java escapes UTF-16 code units: a character outside the BMP is two
+            u = c.encode("utf-16-be")
+            out += [f"\\u{u[j]:02X}{u[j + 1]:02X}" for j in range(0, len(u), 2)]
+    s = "".join(out)
+    return "\\" + s if s.startswith(" ") else s
 
 
 def _unescape(s: str) -> str:
@@ -270,4 +311,5 @@ def _unescape(s: str) -> str:
             continue
         res.append(c)
         i += 1
-    return "".join(res)
+    # Rejoin 🎮-style surrogate pairs into the one character they encode.
+    return "".join(res).encode("utf-16", "surrogatepass").decode("utf-16", "surrogatepass")

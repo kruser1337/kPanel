@@ -4,16 +4,18 @@ The panel at <http://localhost:8080>. For how to *use* it, see
 [`docs/operations.md`](../docs/operations.md). This file is for changing it.
 
 **The split it's built on:** anything Minecraft reads only at startup
-(`server.properties`) goes out as a **PR**, so git stays the source of truth.
-Live server state (whitelist, ops, kicks, gamerules) goes over **RCON** and
-applies immediately: no PR, no restart.
+(`server.properties`) is **saved to the file** and applies on the next restart,
+which the panel can trigger; with a GitHub fork configured it goes out as a
+**PR** instead, so git stays the source of truth. Live server state (whitelist,
+ops, kicks, gamerules) goes over **RCON** and applies immediately: no restart.
 
 ## How it works
 
 ```
 browser ──▶ kpanel:8080   (localhost; your LAN with a login; or tailscale serve :443)
-              │  reads /data/server.properties (ro), talks RCON to mc
-              │  Settings: reads the compose from GitHub (pinned commit)
+              │  talks RCON to mc (live changes, restart via `stop`)
+              │  Settings, default: reads and writes /data/server.properties
+              │  Settings, git mode: reads the compose from GitHub (pinned commit)
               ▼
    PR on kpanel/<ts> ──merge──▶ `docker compose up -d` (or Coolify redeploys)
 ```
@@ -34,8 +36,11 @@ browser ──▶ kpanel:8080   (localhost; your LAN with a login; or tailscale 
 
 Design rules worth keeping:
 
-- **Never write to the server.** Git is the only source of truth; the panel's
-  write path is a PR.
+- **One source of truth per mode.** File mode writes `server.properties` and
+  nothing else, and only keys the compose leaves unset stick. Git mode never
+  writes to the server; its write path is a PR.
+- **Never write an unverified file.** `write_properties` changes only the
+  wanted lines, then parses the result back before it is saved.
 - **Never dump the compose with a YAML library.** It would delete every comment.
   `compose_edit` changes lines and then verifies the parsed result.
 - **No `$` in values.** Coolify and compose would both interpolate it.
