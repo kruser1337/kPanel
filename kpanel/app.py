@@ -558,7 +558,7 @@ def dashboard_page(s, err=""):
     addr = f'{CFG["public_host"]}' + ("" if CFG["public_port"] == 25565 else f':{CFG["public_port"]}')
     ip = f' <span>({e(s["ip"])})</span>' if s["ip"] else ""
     meta = (f'<div class=meta><span title="Address players connect to">Address <code>{e(addr)}</code>{ip}</span>'
-            f'<span>Version <code>{e(p["version"]) if p else "—"}</code></span>{restart_form()}</div>')
+            f'<span>Version <code>{e(p["version"]) if p else "—"}</code></span></div>')
     if p:
         status = '<span class="status up" title="answers the server-list ping">Online</span>'
         motd = f'<div class=motd><span class=tag>MOTD</span> {e(p["motd"])}</div>' if p["motd"] else ""
@@ -569,7 +569,7 @@ def dashboard_page(s, err=""):
                + "</div>") if s["players"] else ""
         out.append(f'<section class="card herocard">{img}<div class=herotext><div class=hero><span class=num>{p["online"]}</span>'
                    f'<span class=of>/ {p["max"]} players</span>{status}</div>{motd}{meta}{who}</div>'
-                   f'<div class=herospark>{pgraph}</div></section>')
+                   f'<div class=herospark>{restart_form()}{pgraph}</div></section>')
     else:
         out.append(f'<section class="card herocard">{img}<div class=herotext><div class=hero><span class="status down" '
                    f'title="{e(s.get("ping_error", ""))}">Offline</span></div>{meta}</div></section>')
