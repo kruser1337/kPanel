@@ -68,6 +68,10 @@ the panel's **Players** page.
 The panel and file manager open **on this machine only**, so they need no login.
 To reach them from somewhere else, add one of the optional overlays below.
 
+**Updating:** `git pull && docker compose up -d --build`. The panel's footer
+tells you when a new release is out; see
+[Upgrading](docs/operations.md#upgrading).
+
 ## Optional extras
 
 | You want | Add | Needs |
