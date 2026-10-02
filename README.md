@@ -38,6 +38,15 @@ business. No multi-tenancy, no database, no user accounts.
 
 <sub>Screenshots use made-up data.</sub>
 
+## Why not Crafty or Pterodactyl?
+
+Use them if you run many servers or host for other people.
+[Pterodactyl](https://pterodactyl.io) is a panel plus a daemon on every machine,
+built for hosting fleets; [Crafty Controller](https://craftycontrol.com) manages
+many servers with user accounts. kPanel is for one server you run for yourself
+and friends: one `docker compose up -d`, no database or accounts to set up, the
+panel never gets the Docker socket, and every setting is explained in place.
+
 ## Quickstart
 
 You need Docker with Compose 2.24 or newer. Then:
@@ -91,6 +100,15 @@ If you'd rather keep settings in git, fork this repository and set
 [`.env.example`](.env.example)). Settings then opens a pull request against
 your fork's `docker-compose.yml` instead of writing the file, so every change
 is reviewed and kept in history.
+
+## Server types
+
+Built and tested on Paper. The panel only uses RCON, the server-list ping and
+the files in `/data`, so other types the image supports (`TYPE: "FABRIC"`,
+`"VANILLA"`, `"PURPUR"`, …) should work too; drop `PAPER_BUILD` when you
+switch. The TPS tile needs the `tps` command of Paper, Purpur and Spigot, so on
+Fabric and vanilla it shows `—`. Choose before the first start: Paper keeps the
+Nether and End in separate folders, so an existing world needs moving first.
 
 ## Newer Minecraft versions
 
