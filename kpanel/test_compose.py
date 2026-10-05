@@ -272,6 +272,12 @@ class TailscaleOverlay(unittest.TestCase):
                                env={"TS_HOSTNAME": host, "TS_TAILNET": "tail1234.ts.net", "PATH": "/bin:/usr/bin"})
             self.assertEqual(r.stdout.strip() == "started", ok, (host, r.stdout, r.stderr))
 
+    def test_the_auth_key_is_used_once(self):
+        """README: the key is needed on first boot only; the login persists."""
+        ts = TAILSCALE["services"]["tailscale"]
+        self.assertEqual(ts["environment"]["TS_AUTH_ONCE"], "true")
+        self.assertIn("tailscale-state:/var/lib/tailscale", ts["volumes"])
+
     def test_its_variables_are_required(self):
         """An empty TS_HOSTNAME builds a serve config for ".", silently serving nothing."""
         for var in ("TS_AUTHKEY", "TS_HOSTNAME", "TS_TAILNET"):

@@ -165,6 +165,13 @@ class Backoff(unittest.TestCase):
         self.assertTrue(self.lg.check(good, "10.0.0.1"))  # logged in before the attack
         self.attack()
         self.assertTrue(self.lg.check(good, "10.0.0.1"))
+        # for CACHE_SECONDS (README: ten minutes), then it has to verify again
+        self.assertEqual(auth.CACHE_SECONDS, 600)
+        self.clock += auth.CACHE_SECONDS - 1
+        self.assertTrue(self.lg.check(good, "10.0.0.1"))
+        self.clock += 2
+        self.attack()
+        self.assertIsNone(self.lg.check(good, "10.0.0.1"))
 
     def test_a_slow_trickle_stays_under_the_global_budget(self):
         for i in range(3 * auth.GLOBAL_FAILURES):

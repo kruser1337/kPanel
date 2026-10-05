@@ -185,8 +185,10 @@ Without a login, the panel answers only to `localhost` (and names in
 `KPANEL_ALLOWED_HOSTS`). That stops **DNS rebinding**, where a web page you
 open points its own domain at your machine to drive the panel from your
 browser. Cross-site form posts are refused too. No-login mode assumes a
-single-user machine and Docker Engine 28 or newer (older versions let hosts on
-the same network segment route around a `127.0.0.1` publish).
+single-user machine and Docker Engine 28 or newer: from 28 on, Docker drops
+packets for a `127.0.0.1`-published port that arrive from the network; older
+versions have no such rule, and a host on the same network segment may get
+through ([moby#45610](https://github.com/moby/moby/issues/45610)).
 
 **Recommended deployment.** Keep the panel off the internet. Reach it on the
 machine itself, over Tailscale, or on your LAN with a login. Don't

@@ -85,9 +85,10 @@ git pull && docker compose up -d --build
   compose network: only the stack's own services are refused (see Fixed).
 - **`KPANEL_BASIC_AUTH`, the plain-text login, is removed in 0.4**, not here,
   so that upgrading never locks anyone out.
-- **No-login mode on Docker Engine older than 28** is not tested: those
-  versions let hosts on the same network segment reach ports published on
-  `127.0.0.1`. Use Docker 28 or newer, or a login.
+- **No-login mode on Docker Engine older than 28.** Docker 28 drops packets
+  for a `127.0.0.1`-published port that arrive from the network; Docker 27
+  has no such rule, so a host on the same network segment may reach the
+  panel. kPanel can't fix that; use Docker 28 or newer, or a login.
 
 Nothing secret was ever committed to this repository; no key needs rotating
 because of kPanel itself.
