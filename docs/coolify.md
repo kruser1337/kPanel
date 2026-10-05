@@ -19,11 +19,10 @@ host, 8080 is often taken already).
 1. **Fork this repository**, and work in your fork.
 2. **Make the file** Coolify will deploy: `cp docker-compose.yml compose/coolify.yml`,
    then in `compose/coolify.yml`:
-   - delete the `ports:` lists of `kpanel` and `filebrowser` (keep `mc`'s);
+   - delete the `ports:` list of `kpanel` (keep `mc`'s);
    - under `kpanel` → `environment`, set
      `COMPOSE_PATH: "compose/coolify.yml"`, so Settings' pull requests edit the
-     file Coolify deploys, and
-     `FILES_URL: "https://${TS_HOSTNAME}.${TS_TAILNET}:8443/"`, and
+     file Coolify deploys,
      `KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME}.${TS_TAILNET},kpanel"` (without a
      login the panel answers only to the names listed here; anything else gets
      a page saying which name to add), and `KPANEL_TRUST_TS_HEADERS: "1"` (the

@@ -3,8 +3,8 @@
 #
 #   docker compose -f docker-compose.yml -f compose/tailscale.yml up -d
 #
-#   https://<TS_HOSTNAME>.<TS_TAILNET>/       the panel
-#   https://<TS_HOSTNAME>.<TS_TAILNET>:8443/  the file manager
+#   https://<TS_HOSTNAME>.<TS_TAILNET>/        the panel
+#   https://<TS_HOSTNAME>.<TS_TAILNET>/files/  the file manager (served by the panel)
 #
 # Set TS_HOSTNAME, TS_TAILNET and TS_AUTHKEY in .env first; compose refuses to
 # start without them. Setup and troubleshooting: docs/tailscale.md.
@@ -18,17 +18,13 @@ services:
     # Not published at all: only the sidecar reaches it, over the compose network.
     ports: !reset []
     environment:
-      # The name the tailnet reaches it by; without a login, every other name is
-      # refused (see KPANEL_ALLOWED_HOSTS). kpanel: the sidecar's upstream, in
-      # case the proxy passes that on as the Host.
       # tailscale serve tells the panel who is logged in to the tailnet, for the
       # action log; only trusted here, where nothing else can reach the panel.
       KPANEL_TRUST_TS_HEADERS: "1"
+      # The name the tailnet reaches it by; without a login, every other name is
+      # refused (see KPANEL_ALLOWED_HOSTS). kpanel: the sidecar's upstream, in
+      # case the proxy passes that on as the Host.
       KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env},kpanel"
-      FILES_URL: "https://${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env}:8443/"
-
-  filebrowser:
-    ports: !reset []
 
   tailscale:
     image: tailscale/tailscale:v1.102.5
@@ -65,15 +61,16 @@ services:
       - /bin/sh
       - -c
       - |
+        # The two names go into JSON unescaped, so they must be plain DNS labels.
+        case "$${TS_HOSTNAME}.$${TS_TAILNET}" in
+          *[!A-Za-z0-9.-]*) echo "TS_HOSTNAME and TS_TAILNET may hold only letters, digits, '.' and '-'" >&2; exit 1 ;;
+        esac
         cat > /tmp/serve.json <<EOF
         {
-          "TCP": { "443": { "HTTPS": true }, "8443": { "HTTPS": true } },
+          "TCP": { "443": { "HTTPS": true } },
           "Web": {
             "$${TS_HOSTNAME}.$${TS_TAILNET}:443": {
               "Handlers": { "/": { "Proxy": "http://kpanel:8080" } }
-            },
-            "$${TS_HOSTNAME}.$${TS_TAILNET}:8443": {
-              "Handlers": { "/": { "Proxy": "http://filebrowser:80" } }
             }
           }
         }
@@ -84,8 +81,6 @@ services:
     depends_on:
       # service_started, not service_healthy: a flapping healthcheck would
       # abort the whole stack, Minecraft included.
-      filebrowser:
-        condition: service_started
       kpanel:
         condition: service_started
 

@@ -49,11 +49,30 @@ class Base(unittest.TestCase):
             env = BASE["services"][name].get("environment") or {}
             self.assertNotIn("RCON_PASSWORD", env, name)
 
-    def test_panel_and_files_are_published_on_loopback_only(self):
-        """That, and only that, is what makes running them without a login safe."""
-        for name in ("kpanel", "filebrowser"):
-            for spec in BASE["services"][name]["ports"]:
-                self.assertTrue(spec.startswith("127.0.0.1:"), f"{name}: {spec}")
+    def test_the_panel_is_published_on_loopback_only(self):
+        """That, plus the Host check against DNS rebinding, is what makes no login safe."""
+        for spec in BASE["services"]["kpanel"]["ports"]:
+            self.assertTrue(spec.startswith("127.0.0.1:"), spec)
+
+    def test_the_file_manager_is_published_nowhere(self):
+        """It has no login of its own: the panel serves it, behind its checks (F-02)."""
+        self.assertNotIn("ports", BASE["services"]["filebrowser"])
+        env = BASE["services"]["kpanel"]["environment"]
+        self.assertEqual(env["FILES_UPSTREAM"], "http://filebrowser:80")
+        self.assertNotIn("FILES_URL", env)  # the panel's own /files/
+
+    def test_the_file_manager_runs_under_the_panels_path(self):
+        script = BASE["services"]["filebrowser"]["entrypoint"][2]
+        config = yaml.safe_load(script.split("<<'EOF'\n", 1)[1].split("\nEOF", 1)[0])
+        self.assertEqual(config["server"]["baseURL"], "/files/")
+        self.assertTrue(config["auth"]["methods"]["noauth"])
+
+    def test_the_file_manager_config_is_not_templated(self):
+        """F-05: a value expanded into YAML by the shell can break or rewrite it.
+        The heredoc is quoted and holds no variable at all."""
+        script = BASE["services"]["filebrowser"]["entrypoint"][2]
+        self.assertIn("<<'EOF'", script)
+        self.assertNotIn("$", script)
 
     def test_only_the_game_is_published_to_the_network(self):
         wide = [(n, p) for n, s in BASE["services"].items() for p in s.get("ports", [])
@@ -98,17 +117,16 @@ class LanOverlay(unittest.TestCase):
 
     def test_bind_addresses_are_literal(self):
         """An empty ${BIND} renders ":8080:8080", which means every interface."""
-        for name in ("kpanel", "filebrowser"):
-            for spec in LAN["services"][name]["ports"]:
-                self.assertNotIn("${", spec, name)
+        for spec in LAN["services"]["kpanel"]["ports"]:
+            self.assertNotIn("${", spec)
 
     def test_it_replaces_the_loopback_binding_rather_than_adding_to_it(self):
         self.assertRegex(LAN_TEXT, r"(?m)^  kpanel:\n    # .*\n    ports: !override")
-        self.assertRegex(LAN_TEXT, r"(?m)^  filebrowser:\n    ports: !override")
 
-    def test_the_file_manager_password_is_required_by_compose(self):
-        """${VAR:?} makes `up` fail before any container starts."""
-        self.assertIn("${FILES_PASSWORD:?", LAN_TEXT)
+    def test_the_file_manager_stays_unpublished(self):
+        """It rides along at /files/, behind the panel's login."""
+        self.assertNotIn("filebrowser", LAN["services"])
+        self.assertNotIn("FILES_PASSWORD", LAN_TEXT)
 
     def test_the_panel_login_is_a_hash_passed_through_from_the_base(self):
         """The base carries it; compose can't require "a hash or the old plaintext",
@@ -126,11 +144,6 @@ class LanOverlay(unittest.TestCase):
     def test_the_panel_itself_also_refuses_without_a_login(self):
         self.assertEqual(LAN["services"]["kpanel"]["environment"]["KPANEL_ALLOW_NO_AUTH"], "")
 
-    def test_the_file_manager_uses_the_password(self):
-        entry = LAN["services"]["filebrowser"]["entrypoint"][2]
-        self.assertIn("adminPassword", entry)
-        self.assertNotIn("noauth", entry)
-
     def test_it_only_overrides_services_that_exist(self):
         """A name that matches nothing in the base silently does nothing."""
         self.assertEqual(set(LAN["services"]) - set(BASE["services"]), set())
@@ -140,7 +153,24 @@ class TailscaleOverlay(unittest.TestCase):
     def test_nothing_but_the_game_is_published(self):
         """The tailnet is the boundary; a published port would bypass it."""
         self.assertRegex(TAILSCALE_TEXT, r"(?m)^  kpanel:\n(    #.*\n)*    ports: !reset \[\]")
-        self.assertRegex(TAILSCALE_TEXT, r"(?m)^  filebrowser:\n    ports: !reset \[\]")
+        self.assertNotIn("filebrowser", TAILSCALE["services"])  # unpublished in the base already
+
+    def test_the_sidecar_serves_only_the_panel(self):
+        """The file manager is the panel's /files/ now; no second port to it."""
+        script = TAILSCALE["services"]["tailscale"]["entrypoint"][2]
+        self.assertNotIn("8443", script)
+        self.assertNotIn("filebrowser", script)
+
+    def test_names_that_would_break_the_serve_json_are_refused(self):
+        """F-05's sibling: TS_HOSTNAME/TS_TAILNET go into JSON unescaped."""
+        import subprocess
+        script = TAILSCALE["services"]["tailscale"]["entrypoint"][2].replace("$$", "$")
+        script = script.replace("cat > /tmp/serve.json", "cat > /dev/null").replace(
+            "exec /usr/local/bin/containerboot", "echo started")
+        for host, ok in (("kpanel", True), ('x", "Proxy": "http://evil', False), ("a b", False)):
+            r = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                               env={"TS_HOSTNAME": host, "TS_TAILNET": "tail1234.ts.net", "PATH": "/bin:/usr/bin"})
+            self.assertEqual(r.stdout.strip() == "started", ok, (host, r.stdout, r.stderr))
 
     def test_its_variables_are_required(self):
         """An empty TS_HOSTNAME builds a serve config for ".", silently serving nothing."""

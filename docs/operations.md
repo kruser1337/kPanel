@@ -146,15 +146,16 @@ manager and restart, but don't manage the same plugin both ways.
 
 ## File manager
 
-<http://localhost:8081>: the whole server folder (world, configs, logs,
-plugins), plus the backups, read-only.
+<http://localhost:8080/files/> (the panel's **Files** link): the whole server
+folder (world, configs, logs, plugins), plus the backups, read-only.
 
 - **Don't edit or replace files under `world*/` while players are online.** The
   server holds them in memory and will overwrite or corrupt your change. Stop it
   first: `docker compose stop mc`.
 - Downloading a `world*/` folder is the easy way to take a copy home.
-- Without `compose/lan.yml` it has no login, because only this machine can
-  reach it. With it, it requires `FILES_PASSWORD`.
+- It has no port and no login of its own: the panel serves it, so it is
+  reachable exactly where the panel is, behind the panel's login when there is
+  one. (Until 0.2 it had its own port, 8081, and `FILES_PASSWORD`; both are gone.)
 
 ## Backups
 

@@ -59,7 +59,7 @@ docker compose up -d
 That's all. No `.env`, no accounts:
 
 - **The panel** is at <http://localhost:8080>
-- **The file manager** is at <http://localhost:8081>
+- **The file manager** is at <http://localhost:8080/files/> (the panel's **Files** link)
 - **Players** connect to this machine on port **25565**
 
 The whitelist is on, so before anyone can join, add them (yourself first) on

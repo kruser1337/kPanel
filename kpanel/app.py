@@ -41,6 +41,7 @@ import yaml
 
 import auth
 import compose_edit as ce
+import filesproxy
 import history
 import procstats
 import release
@@ -59,7 +60,10 @@ CFG = {
     "props": os.environ.get("PROPERTIES_PATH", "/data/server.properties"),
     "data": os.environ.get("DATA_DIR", "/data"),
     "backups": os.environ.get("BACKUPS_DIR", "/backups"),
-    "files_url": os.environ.get("FILES_URL", ""),
+    # The file manager, served by the panel under /files/ (see filesproxy).
+    "files_upstream": os.environ.get("FILES_UPSTREAM", ""),
+    # Where the Files link points: /files/ when the panel serves it.
+    "files_url": os.environ.get("FILES_URL", "") or ("/files/" if os.environ.get("FILES_UPSTREAM") else ""),
     "public_host": os.environ.get("PUBLIC_HOST", "localhost"),
     "public_port": int(os.environ.get("PUBLIC_PORT", "25565")),
     "game_host": os.environ.get("GAME_HOST", "mc"),
@@ -1075,6 +1079,24 @@ class Handler(BaseHTTPRequestHandler):
             self._challenge()
         return ok
 
+    def _files(self, path):
+        """True if this is a file-manager request, which has then been relayed."""
+        if not (CFG["files_upstream"] and filesproxy.handles(path)):
+            return False
+        filesproxy.forward(self, CFG["files_upstream"])
+        return True
+
+    def _other_method(self):
+        """PUT, PATCH, DELETE, HEAD: only the file manager uses them."""
+        if not self._gate():
+            return
+        if self.command != "HEAD" and not same_origin(self.headers):
+            return self._send(403, "cross-site request refused", "text/plain")
+        if not self._files(self.path.split("?")[0]):
+            self._send(405, "method not allowed", "text/plain")
+
+    do_PUT = do_PATCH = do_DELETE = do_HEAD = _other_method
+
     def do_GET(self):
         path = self.path.split("?")[0]
         # Exempt: the container healthcheck has no credentials to offer, and it
@@ -1082,6 +1104,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             return self._send(200, "ok", "text/plain")
         if not self._gate():
+            return
+        if self._files(path):
             return
         if path in ("/favicon.png", "/favicon.ico") and FAVICON_PNG:
             # /favicon.ico too: some browsers ask for it regardless of the <link>,
@@ -1117,6 +1141,8 @@ class Handler(BaseHTTPRequestHandler):
         # through this panel.
         if not same_origin(self.headers):
             return self._send(403, "cross-site request refused", "text/plain")
+        if self._files(self.path.split("?")[0]):
+            return
         if self.path not in ("/save", "/import", "/players", "/gamerules", "/restart"):
             return self._send(404, "not found", "text/plain")
         if self.path == "/import" and settings_mode() != "git":

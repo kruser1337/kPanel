@@ -5,7 +5,8 @@ puts the panel and the file manager on your tailnet, with real HTTPS
 certificates, reachable from any of your devices wherever they are:
 
 - `https://<TS_HOSTNAME>.<TS_TAILNET>/`, the panel
-- `https://<TS_HOSTNAME>.<TS_TAILNET>:8443/`, the file manager
+- `https://<TS_HOSTNAME>.<TS_TAILNET>/files/`, the file manager (served by the
+  panel; until 0.2 it was on port 8443)
 
 The tailnet is the boundary: only your devices can reach either one, so neither
 asks for a login, and nothing but the game port is published on the host.

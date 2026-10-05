@@ -6,7 +6,7 @@
 # panel and file manager open on this machine only:
 #
 #   panel         http://localhost:8080
-#   file manager  http://localhost:8081
+#   file manager  http://localhost:8080/files/  (served by the panel)
 #
 # Optional extras are overlays, added with -f (see README.md):
 #   compose/lan.yml        reach the panel from other devices on your network
@@ -102,11 +102,12 @@ services:
     image: gtstef/filebrowser:1.5.6-stable-slim
     restart: unless-stopped
     mem_limit: 384m
-    # Published on loopback only, so no login is needed: only this machine can
-    # reach it. compose/lan.yml turns a password on when it publishes wider.
-    ports:
-      - "127.0.0.1:8081:80"
-    # The config is written on every start, so it lives here. defaultEnabled
+    # Published nowhere, and no login of its own: the panel serves it under
+    # /files/ (FILES_UPSTREAM below), behind the panel's host check and login.
+    # On a port of its own, a web page using DNS rebinding could write to /data,
+    # a plugin .jar included, and so run code in the server.
+    # The config is written on every start, so it lives here. It holds no
+    # variables, and the quoted 'EOF' keeps the shell from expanding any. defaultEnabled
     # must be explicit on every source: with more than one, Quantum otherwise
     # defaults to false and users get "no access to source".
     entrypoint:
@@ -116,6 +117,7 @@ services:
         cat > /tmp/config.yaml <<'EOF'
         server:
           port: 80
+          baseURL: /files/
           disableUpdateCheck: true
           disablePreviews: true
           disableWebDAV: true
@@ -179,9 +181,8 @@ services:
       GITHUB_REPO: "${KPANEL_GITHUB_REPO:-}"
       GITHUB_BRANCH: "main"
       COMPOSE_PATH: "docker-compose.yml"
-      # The file manager. A localhost link is rewritten in the browser to the
-      # host you opened the panel on, so it also works from another device.
-      FILES_URL: "http://localhost:8081/"
+      # The file manager, served by the panel at /files/ (the Files link).
+      FILES_UPSTREAM: "http://filebrowser:80"
       RCON_HOST: "mc"
       RCON_PORT: "25575"
       # What players type to connect; the dashboard shows and pings it.
