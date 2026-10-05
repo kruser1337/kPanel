@@ -35,7 +35,7 @@ import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import yaml
 
@@ -74,6 +74,9 @@ CFG = {
     "basic_auth": os.environ.get("KPANEL_BASIC_AUTH", ""),
     # Asks api.github.com twice a day whether a newer kPanel exists. 0 turns it off.
     "update_check": os.environ.get("KPANEL_UPDATE_CHECK", "1") != "0",
+    # Host names the panel answers to besides localhost, comma-separated; "*" is
+    # any. See host_allowed(): without a login, this is what stops DNS rebinding.
+    "allowed_hosts": os.environ.get("KPANEL_ALLOWED_HOSTS", ""),
 }
 SPARK_POINTS = 5  # per graph: the last 4 samples plus the live value
 UNSET_DEFAULTS = {"blank", "[random text]", ""}
@@ -448,6 +451,11 @@ def settings_mode():
     return "git" if CFG["token"] and CFG["repo"] else "file"
 
 
+def auth_configured():
+    """True when the panel asks for a login."""
+    return bool(CFG["basic_auth"])
+
+
 def require_auth_boundary(basic_auth, allow_no_auth):
     """Refuse to start a panel that anyone who can reach it can control.
 
@@ -462,6 +470,64 @@ def require_auth_boundary(basic_auth, allow_no_auth):
         "  Set KPANEL_BASIC_AUTH=user:password to require a login, or\n"
         "  set KPANEL_ALLOW_NO_AUTH=1 if the panel is only reachable over a\n"
         "  tailnet or VPN and that network is the boundary.")
+
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+
+
+def host_name(value):
+    """The host part of a Host header or netloc, normalised: 'Example.COM.:8080' -> 'example.com'.
+
+    IPv6 keeps its brackets ('[::1]:8080' -> '[::1]'). '' for anything unusable.
+    """
+    v = (value or "").strip().lower()
+    if v.startswith("["):
+        end = v.find("]")
+        return v[:end + 1] if end > 0 else ""
+    if v.count(":") > 1:  # a bare IPv6 address, e.g. from an allowlist entry
+        return f"[{v}]"
+    return v.partition(":")[0].rstrip(".")
+
+
+def host_allowed(host_header, allowed=None, login=None):
+    """May a request that names this Host be answered?
+
+    DNS rebinding: a page on attacker.example re-points its own name at
+    127.0.0.1, and the browser then treats the panel as part of the attacker's
+    site, same-origin, so Sec-Fetch-Site doesn't help. The Host header still
+    says attacker.example, and that is what this rejects.
+
+    Without a login the panel answers only to localhost and the names in
+    KPANEL_ALLOWED_HOSTS. With a login, a rebinding page gets nothing anyway
+    (the browser keeps credentials per origin), so any name is fine unless
+    KPANEL_ALLOWED_HOSTS narrows it.
+    """
+    allowed = CFG["allowed_hosts"] if allowed is None else allowed
+    login = auth_configured() if login is None else login
+    extra = {host_name(h) if h.strip() != "*" else "*" for h in allowed.split(",") if h.strip()}
+    if "*" in extra or (login and not extra):
+        return True
+    name = host_name(host_header)
+    return bool(name) and (name in LOOPBACK_HOSTS or name in extra)
+
+
+def same_origin(headers):
+    """CSRF: a state-changing request must come from one of the panel's own pages.
+
+    Browsers send Sec-Fetch-Site on every request; one that doesn't (Safari
+    before 16.4, old webviews) is judged by Origin, then Referer. A request with
+    none of the three is refused: no browser page sends that, and a cross-site
+    form from one of those browsers is exactly what it would look like.
+    """
+    origin = headers.get("Origin")
+    if origin and origin != "null" and urlsplit(origin).netloc.lower() != (headers.get("Host") or "").lower():
+        return False
+    site = headers.get("Sec-Fetch-Site")
+    if site is not None:
+        return site in ("same-origin", "none")
+    source = origin or headers.get("Referer") or ""
+    return bool(source) and source != "null" and \
+        urlsplit(source).netloc.lower() == (headers.get("Host") or "").lower()
 
 
 ALL_NAV = [("/", "Dashboard"), ("/settings", "Settings"), ("/players", "Players"),
@@ -908,6 +974,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _misdirected(self):
+        """Refuse a request for a host name the panel doesn't answer to (see host_allowed)."""
+        name = host_name(self.headers.get("Host"))[:100]
+        name = "".join(c for c in name if c.isprintable()) or "(none)"
+        print(f"refused request for host {name!r}: not localhost or in KPANEL_ALLOWED_HOSTS", flush=True)
+        return self._send(403, (
+            f"kPanel does not answer to the host name {name!r}.\n\n"
+            "This protects a panel without a login from DNS rebinding: a web page\n"
+            "pointing its own name at this machine to control the panel.\n\n"
+            "If you opened the panel by this name on purpose, add it to\n"
+            "KPANEL_ALLOWED_HOSTS (comma-separated) in .env and restart:\n\n"
+            f"  KPANEL_ALLOWED_HOSTS={name}\n"), "text/plain; charset=utf-8")
+
     def _authorised(self):
         """True unless basic auth is configured and the request fails it."""
         want = CFG["basic_auth"]
@@ -929,6 +1008,8 @@ class Handler(BaseHTTPRequestHandler):
         # reveals nothing.
         if path == "/healthz":
             return self._send(200, "ok", "text/plain")
+        if not host_allowed(self.headers.get("Host")):
+            return self._misdirected()
         if not self._authorised():
             return self._challenge()
         if path in ("/favicon.png", "/favicon.ico") and FAVICON_PNG:
@@ -959,11 +1040,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, page(rows, prs))
 
     def do_POST(self):
+        if not host_allowed(self.headers.get("Host")):
+            return self._misdirected()
         if not self._authorised():
             return self._challenge()
-        # Browsers send Sec-Fetch-Site on every request; refuse cross-site posts
-        # so another page open in your browser can't act through this panel.
-        if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+        # Refuse cross-site posts, so another page open in your browser can't act
+        # through this panel.
+        if not same_origin(self.headers):
             return self._send(403, "cross-site request refused", "text/plain")
         if self.path not in ("/save", "/import", "/players", "/gamerules", "/restart"):
             return self._send(404, "not found", "text/plain")

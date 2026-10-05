@@ -18,6 +18,10 @@ services:
     # Not published at all: only the sidecar reaches it, over the compose network.
     ports: !reset []
     environment:
+      # The name the tailnet reaches it by; without a login, every other name is
+      # refused (see KPANEL_ALLOWED_HOSTS). kpanel: the sidecar's upstream, in
+      # case the proxy passes that on as the Host.
+      KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env},kpanel"
       FILES_URL: "https://${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env}:8443/"
 
   filebrowser:

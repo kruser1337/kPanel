@@ -23,7 +23,10 @@ host, 8080 is often taken already).
    - under `kpanel` → `environment`, set
      `COMPOSE_PATH: "compose/coolify.yml"`, so Settings' pull requests edit the
      file Coolify deploys, and
-     `FILES_URL: "https://${TS_HOSTNAME}.${TS_TAILNET}:8443/"`;
+     `FILES_URL: "https://${TS_HOSTNAME}.${TS_TAILNET}:8443/"`, and
+     `KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME}.${TS_TAILNET},kpanel"` (without a
+     login the panel answers only to the names listed here; anything else gets
+     a page saying which name to add);
    - copy the `tailscale:` service from
      [`compose/tailscale.yml`](../compose/tailscale.yml) into `services:`, and
      `tailscale-state:` into `volumes:`.

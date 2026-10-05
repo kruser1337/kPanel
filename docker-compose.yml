@@ -160,6 +160,10 @@ services:
       # compose/lan.yml clears this and requires KPANEL_BASIC_AUTH instead.
       KPANEL_ALLOW_NO_AUTH: "1"
       KPANEL_BASIC_AUTH: "${KPANEL_BASIC_AUTH:-}"
+      # Without a login the panel answers only to localhost, so a web page can't
+      # point its own domain at this machine and drive the panel (DNS
+      # rebinding). Names you open it by on purpose go here, comma-separated.
+      KPANEL_ALLOWED_HOSTS: "${KPANEL_ALLOWED_HOSTS:-}"
       # The footer asks api.github.com twice a day for a newer kPanel release.
       # Set KPANEL_UPDATE_CHECK=0 to never contact GitHub for it.
       KPANEL_UPDATE_CHECK: "${KPANEL_UPDATE_CHECK:-1}"

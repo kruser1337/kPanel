@@ -9,6 +9,7 @@ runs exactly as in production.
 """
 
 import base64
+import http.client
 import json
 import re
 import os
@@ -428,6 +429,102 @@ class App(unittest.TestCase):
 
     def test_restart_cross_site_refused(self):
         status, _ = self.post("/restart", {}, {"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 403)
+        self.assertEqual(FakeMinecraft.sent, [])
+
+    # --- DNS rebinding and CSRF ----------------------------------------------------
+
+    def raw(self, method, path, headers, data=None):
+        """A request with exactly these headers: urllib would add or keep ones a test must leave out."""
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=5)
+        body = urllib.parse.urlencode(data).encode() if data is not None else None
+        c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+        for k, v in headers.items():
+            c.putheader(k, v)
+        if body is not None:
+            c.putheader("Content-Type", "application/x-www-form-urlencoded")
+            c.putheader("Content-Length", str(len(body)))
+        c.endheaders(body)
+        r = c.getresponse()
+        out = r.status, r.read().decode()
+        c.close()
+        return out
+
+    def here(self):
+        return f"127.0.0.1:{self.srv.server_address[1]}"
+
+    def test_a_rebound_host_name_is_refused_without_a_login(self):
+        """What a browser sends after attacker.example re-points itself at 127.0.0.1."""
+        port = self.srv.server_address[1]
+        status, body = self.raw("GET", "/logs", {"Host": f"attacker.example:{port}"})
+        self.assertEqual(status, 403)
+        self.assertIn("KPANEL_ALLOWED_HOSTS=attacker.example", body)
+        self.assertNotIn("ANCIENT", body)
+
+    def test_a_rebound_post_changes_nothing(self):
+        port = self.srv.server_address[1]
+        rebound = {"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}",
+                   "Sec-Fetch-Site": "same-origin"}
+        for path, form in (("/players", {"action": "op", "name": "Mallory"}), ("/restart", {})):
+            status, _ = self.raw("POST", path, rebound, form)
+            self.assertEqual(status, 403, path)
+        self.assertEqual(FakeMinecraft.sent, [])
+
+    def test_loopback_names_are_always_answered(self):
+        port = self.srv.server_address[1]
+        for host in (f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}", "LOCALHOST.", "localhost"):
+            self.assertEqual(self.raw("GET", "/logs", {"Host": host})[0], 200, host)
+
+    def test_allowed_hosts_lets_a_named_host_in(self):
+        port = self.srv.server_address[1]
+        app.CFG["allowed_hosts"] = "mc.example.lan, kpanel.tail1234.ts.net:443"
+        self.addCleanup(app.CFG.update, allowed_hosts="")
+        self.assertEqual(self.raw("GET", "/logs", {"Host": f"MC.example.lan:{port}"})[0], 200)
+        self.assertEqual(self.raw("GET", "/logs", {"Host": "kpanel.tail1234.ts.net"})[0], 200)
+        self.assertEqual(self.raw("GET", "/logs", {"Host": "evil.ts.net"})[0], 403)
+
+    def test_allowed_hosts_star_answers_any_name(self):
+        app.CFG["allowed_hosts"] = "*"
+        self.addCleanup(app.CFG.update, allowed_hosts="")
+        self.assertEqual(self.raw("GET", "/logs", {"Host": "anything.example"})[0], 200)
+
+    def test_a_missing_host_header_is_refused(self):
+        self.assertEqual(self.raw("GET", "/logs", {})[0], 403)
+
+    def test_with_a_login_any_host_name_is_fine_unless_narrowed(self):
+        """Rebinding gets no credentials (the browser keeps them per origin), so a
+        reverse proxy with its own domain keeps working."""
+        self.assertTrue(app.host_allowed("panel.example.com", allowed="", login=True))
+        self.assertFalse(app.host_allowed("panel.example.com", allowed="other.example", login=True))
+        self.assertFalse(app.host_allowed("panel.example.com", allowed="", login=False))
+
+    def test_healthz_answers_any_host(self):
+        self.assertEqual(self.raw("GET", "/healthz", {"Host": "kpanel:8080"}), (200, "ok"))
+
+    def test_host_name_normalisation(self):
+        self.assertEqual(app.host_name("Example.COM.:8080"), "example.com")
+        self.assertEqual(app.host_name("[::1]:8080"), "[::1]")
+        self.assertEqual(app.host_name("::1"), "[::1]")
+        self.assertEqual(app.host_name("[::1"), "")
+        self.assertEqual(app.host_name(None), "")
+
+    def test_post_without_fetch_metadata_is_judged_by_origin(self):
+        """Safari before 16.4 sends no Sec-Fetch-Site: fall back to Origin, then Referer."""
+        here = self.here()
+        form = {"action": "op", "name": "Mallory"}
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Origin": "http://evil.example"}, form)[0], 403)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Origin": "null"}, form)[0], 403)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Referer": "http://evil.example/x"}, form)[0], 403)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here}, form)[0], 403)  # none of the three
+        self.assertEqual(FakeMinecraft.sent, [])
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Origin": f"http://{here}"}, form)[0], 200)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Referer": f"http://{here}/players"},
+                                  {"action": "deop", "name": "Mallory"})[0], 200)
+
+    def test_a_foreign_origin_is_refused_even_with_same_origin_fetch_metadata(self):
+        here = self.here()
+        status, _ = self.raw("POST", "/players", {"Host": here, "Sec-Fetch-Site": "same-origin",
+                                                  "Origin": "http://evil.example"}, {"action": "op", "name": "Mallory"})
         self.assertEqual(status, 403)
         self.assertEqual(FakeMinecraft.sent, [])
 
