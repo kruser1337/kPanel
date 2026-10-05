@@ -3,10 +3,9 @@
 #   docker compose -f docker-compose.yml -f compose/lan.yml up -d
 #
 # Publishes both on every interface of this host, so both need a password, and
-# compose refuses to start until they are set (in .env, next to
-# docker-compose.yml):
+# neither starts until it is set (in .env, next to docker-compose.yml):
 #
-#   KPANEL_BASIC_AUTH=admin:a-long-password
+#   KPANEL_PASSWORD_HASH='$argon2id$...'   from: docker compose exec kpanel python hashpw.py
 #   FILES_PASSWORD=another-long-password
 #
 # Then open http://<this-host>:8080. This is plain HTTP: fine on a home
@@ -21,9 +20,9 @@ services:
       - "0.0.0.0:8080:8080"
     environment:
       # Reachable from the network now, so "no login" is no longer an option:
-      # with this cleared, the panel itself also refuses to start without a login.
+      # with this cleared, the panel refuses to start without KPANEL_PASSWORD_HASH
+      # (or the deprecated KPANEL_BASIC_AUTH) in .env.
       KPANEL_ALLOW_NO_AUTH: ""
-      KPANEL_BASIC_AUTH: "${KPANEL_BASIC_AUTH:?compose/lan.yml publishes the panel: set KPANEL_BASIC_AUTH=user:password in .env}"
 
   filebrowser:
     ports: !override

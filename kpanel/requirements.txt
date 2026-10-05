@@ -1,0 +1,8 @@
+# Everything the panel needs beyond the standard library, pinned.
+pyyaml==6.0.2
+# The login's password hash (auth.py). Wheels for musl on x86_64 and aarch64,
+# so the Alpine image needs no compiler; the Dockerfile refuses to build them.
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
+cffi==2.1.1
+pycparser==3.0

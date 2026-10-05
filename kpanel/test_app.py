@@ -589,6 +589,35 @@ class App(unittest.TestCase):
         finally:
             app.CFG["basic_auth"] = ""
 
+    def with_hashed_login(self, password="correct horse battery"):
+        saved = dict(app.CFG)
+        app.CFG.update(user="admin", password_hash=app.auth.hash_password(password), basic_auth="")
+        self.addCleanup(lambda: app.CFG.update(saved))
+        return {"Authorization": "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()}
+
+    def test_a_hashed_login_challenges_then_lets_the_right_password_in(self):
+        good = self.with_hashed_login()
+        self.assertEqual(self.get_raw("/players")[0], 401)
+        status, body = self.get_raw("/players", good)
+        self.assertEqual(status, 200)
+        self.assertNotIn("plain text", body)  # no deprecation banner with a hash
+
+    def test_repeated_wrong_passwords_get_429_with_retry_after(self):
+        self.with_hashed_login()
+        bad = {"Authorization": "Basic " + base64.b64encode(b"admin:guess").decode()}
+        codes = [self.get_raw("/players", bad)[0] for _ in range(app.auth.FREE_FAILURES + 1)]
+        self.assertEqual(codes[:-1], [401] * app.auth.FREE_FAILURES)
+        self.assertEqual(codes[-1], 429)
+
+    def test_the_plaintext_login_still_works_but_every_page_says_to_migrate(self):
+        app.CFG["basic_auth"] = "admin:hunter2-is-long"
+        self.addCleanup(app.CFG.update, basic_auth="")
+        status, body = self.get_raw("/players", {"Authorization": "Basic " + base64.b64encode(
+            b"admin:hunter2-is-long").decode()})
+        self.assertEqual(status, 200)
+        self.assertIn("stored in plain text (KPANEL_BASIC_AUTH)", body)
+        self.assertIn("python hashpw.py", body)
+
     def test_healthz_stays_reachable_for_the_container_healthcheck(self):
         app.CFG["basic_auth"] = "admin:hunter2"
         try:

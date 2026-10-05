@@ -13,8 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      # The panel's only third-party dependency; everything else is stdlib.
-      - run: pip install pyyaml
+      # The image's pinned dependencies, so tests run against what ships.
+      - run: pip install -r kpanel/requirements.txt
       # No PROPS_FIXTURE: the suite falls back to kpanel/testdata/server.properties,
       # so this is the same run a contributor gets on a fresh clone.
       - name: Run tests

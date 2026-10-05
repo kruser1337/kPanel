@@ -76,7 +76,7 @@ tells you when a new release is out; see
 
 | You want | Add | Needs |
 |---|---|---|
-| The panel from other devices on your network | `-f compose/lan.yml` | `KPANEL_BASIC_AUTH` and `FILES_PASSWORD` in `.env` |
+| The panel from other devices on your network | `-f compose/lan.yml` | A panel login (`KPANEL_PASSWORD_HASH`) and `FILES_PASSWORD` in `.env`; see below |
 | The panel from anywhere, over HTTPS | `-f compose/tailscale.yml` | A Tailscale account; see [`docs/tailscale.md`](docs/tailscale.md) |
 | Settings changes as reviewed pull requests | nothing extra | A fork of this repo and a GitHub token; see [Settings](#settings) |
 | Deploys on every merge | Coolify | See [`docs/coolify.md`](docs/coolify.md) |
@@ -88,9 +88,22 @@ cp .env.example .env    # uncomment and fill in the lines you need
 docker compose -f docker-compose.yml -f compose/lan.yml up -d
 ```
 
+**The panel login is a hash, not a password.** With the stack running (the
+base file alone is fine), make it with
+
+```bash
+docker compose exec kpanel python hashpw.py
+```
+
+It asks for a password (12 characters or more) and prints a line like
+`KPANEL_PASSWORD_HASH='$argon2id$v=19$…'`. Paste it into `.env` **with its
+single quotes**: without them compose reads each `$` as a variable. Log in as
+`admin` (or set `KPANEL_USER`). Upgrading from 0.2 with `KPANEL_BASIC_AUTH`?
+It still works in 0.3, and every page tells you to make the swap.
+
 **Passwords are enforced, not suggested.** `compose/lan.yml` publishes the panel
-and the file manager to your network, so compose refuses to start until both
-passwords are set, and the panel itself refuses to run without a login. A panel
+and the file manager to your network, so compose refuses to start until the
+file manager's password is set, and the panel itself refuses to run without a login. A panel
 exposed by accident looks exactly like one that is working, so it must not be
 possible to get one by forgetting a line.
 

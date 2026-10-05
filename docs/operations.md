@@ -238,7 +238,9 @@ from before the upgrade. The Java version comes from the image tag
 | Symptom | Check |
 |---|---|
 | `docker compose up` says `required variable … is missing a value` | An overlay needs a value in `.env`; the message names it. See [`.env.example`](../.env.example) |
-| The panel container keeps restarting, log says it `refuses to start` | It is reachable without a login and wasn't told that's intended. Set `KPANEL_BASIC_AUTH`, or use the base file alone (loopback) |
+| The panel container keeps restarting, log says it `refuses to start` | It is reachable without a login and wasn't told that's intended. Set `KPANEL_PASSWORD_HASH` (see [Optional extras](../README.md#optional-extras)), or use the base file alone (loopback). If it says the hash `is not an argon2 hash`, the single quotes around it in `.env` are missing |
+| The panel answers `too many failed logins` (HTTP 429) | Five wrong passwords in a row from your address; it waits 1 s, then doubles each time, up to 5 min. Wait, then log in with the right one |
+| The panel says it `does not answer to the host name` | Without a login it answers only to `localhost`, against DNS rebinding. Add the name you use to `KPANEL_ALLOWED_HOSTS` in `.env` |
 | `ports: !override` / `!reset` is rejected | Docker Compose is older than 2.24. Upgrade it |
 | Players can't connect | Is 25565 open in the host's firewall, and forwarded on your router for players outside your network? `nc -z <host> 25565` from outside |
 | "You are not white-listed on this server" | Add them on the Players page, or `rcon-cli whitelist add <name>` |

@@ -106,10 +106,22 @@ class LanOverlay(unittest.TestCase):
         self.assertRegex(LAN_TEXT, r"(?m)^  kpanel:\n    # .*\n    ports: !override")
         self.assertRegex(LAN_TEXT, r"(?m)^  filebrowser:\n    ports: !override")
 
-    def test_both_passwords_are_required_by_compose(self):
+    def test_the_file_manager_password_is_required_by_compose(self):
         """${VAR:?} makes `up` fail before any container starts."""
-        self.assertIn("${KPANEL_BASIC_AUTH:?", LAN_TEXT)
         self.assertIn("${FILES_PASSWORD:?", LAN_TEXT)
+
+    def test_the_panel_login_is_a_hash_passed_through_from_the_base(self):
+        """The base carries it; compose can't require "a hash or the old plaintext",
+        so the panel enforces it (test_the_panel_itself_also_refuses_without_a_login)."""
+        env = BASE["services"]["kpanel"]["environment"]
+        self.assertEqual(env["KPANEL_PASSWORD_HASH"], "${KPANEL_PASSWORD_HASH:-}")
+        self.assertNotIn("KPANEL_BASIC_AUTH", LAN["services"]["kpanel"]["environment"])
+
+    def test_the_example_env_holds_no_usable_password(self):
+        """A placeholder someone uncomments unchanged is a public password."""
+        for line in ENV_EXAMPLE.splitlines():
+            if line.startswith(("# KPANEL_BASIC_AUTH=", "# FILES_PASSWORD=")):
+                self.assertEqual(line.split("=", 1)[1], "", line)
 
     def test_the_panel_itself_also_refuses_without_a_login(self):
         self.assertEqual(LAN["services"]["kpanel"]["environment"]["KPANEL_ALLOW_NO_AUTH"], "")

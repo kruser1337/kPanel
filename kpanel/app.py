@@ -25,7 +25,6 @@ import base64
 import collections
 import glob
 import hashlib
-import hmac
 import html
 import json
 import os
@@ -40,6 +39,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import yaml
 
+import auth
 import compose_edit as ce
 import history
 import procstats
@@ -70,8 +70,12 @@ CFG = {
     "rcon_password": os.environ.get("RCON_PASSWORD", ""),
     "history": os.environ.get("HISTORY_PATH", "/var/lib/kpanel/history.json"),
     "sample_seconds": int(os.environ.get("SAMPLE_SECONDS", "300")),
-    # "user:password" turns on HTTP basic auth. Empty means the panel trusts
-    # whoever can reach it, which is only safe behind a tailnet or VPN.
+    # The login, HTTP basic auth: KPANEL_USER plus an argon2id hash made by
+    # hashpw.py. None of these set means the panel trusts whoever can reach it,
+    # which is only safe on loopback or behind a tailnet or VPN.
+    "user": os.environ.get("KPANEL_USER", "admin"),
+    "password_hash": os.environ.get("KPANEL_PASSWORD_HASH", ""),
+    # Deprecated: "user:password" in plain text. Works in 0.3 with a warning.
     "basic_auth": os.environ.get("KPANEL_BASIC_AUTH", ""),
     # Asks api.github.com twice a day whether a newer kPanel exists. 0 turns it off.
     "update_check": os.environ.get("KPANEL_UPDATE_CHECK", "1") != "0",
@@ -466,9 +470,28 @@ def settings_mode():
     return "git" if CFG["token"] and CFG["repo"] else "file"
 
 
+_LOGIN = {}
+
+
+def login():
+    """The auth.Login for the current CFG (rebuilt only when CFG's login changes)."""
+    key = (CFG["user"], CFG["password_hash"], CFG["basic_auth"])
+    if key not in _LOGIN:
+        _LOGIN.clear()
+        _LOGIN[key] = auth.Login(*key)
+    return _LOGIN[key]
+
+
 def auth_configured():
     """True when the panel asks for a login."""
-    return bool(CFG["basic_auth"])
+    return login().configured()
+
+
+PLAINTEXT_WARNING = (
+    "The panel password is stored in plain text (KPANEL_BASIC_AUTH). Run "
+    "<code>docker compose exec kpanel python hashpw.py</code>, put the line it prints "
+    "into .env in place of KPANEL_BASIC_AUTH, and run <code>docker compose up -d</code>. "
+    "kPanel 0.4 will refuse to start with KPANEL_BASIC_AUTH.")
 
 
 def require_auth_boundary(basic_auth, allow_no_auth):
@@ -482,7 +505,7 @@ def require_auth_boundary(basic_auth, allow_no_auth):
         return
     raise SystemExit(
         "kPanel refuses to start without an access boundary.\n"
-        "  Set KPANEL_BASIC_AUTH=user:password to require a login, or\n"
+        "  Set KPANEL_PASSWORD_HASH (from `python hashpw.py`) to require a login, or\n"
         "  set KPANEL_ALLOW_NO_AUTH=1 if the panel is only reachable over a\n"
         "  tailnet or VPN and that network is the boundary.")
 
@@ -561,7 +584,9 @@ def head(active, filter_placeholder="", refresh=0):
             f"<title>kPanel</title><link rel=icon type=image/png href=/favicon.png>"
             f"<style>{ui.CSS}</style></head><body{r}><header><div class=bar-in><h1>"
             f"{'<img class=logo src=/favicon.png alt=>' if FAVICON_PNG else ''}kPanel</h1>"
-            f"<nav>{links}{files}</nav>{q}</div></header><main>")
+            f"<nav>{links}{files}</nav>{q}</div></header><main>"
+            + (f'<div class="card warn note" role=alert>{ui.icon("alert-triangle")}<div>{PLAINTEXT_WARNING}</div></div>'
+               if login().deprecated else ""))
 
 
 COFFEE_URL = "https://buymeacoffee.com/kruser1337"
@@ -1010,20 +1035,31 @@ class Handler(BaseHTTPRequestHandler):
             "KPANEL_ALLOWED_HOSTS (comma-separated) in .env and restart:\n\n"
             f"  KPANEL_ALLOWED_HOSTS={name}\n"), "text/plain; charset=utf-8")
 
-    def _authorised(self):
-        """True unless basic auth is configured and the request fails it."""
-        want = CFG["basic_auth"]
-        if not want:
+    def _gate(self):
+        """True if the request may go on; otherwise the refusal has been sent.
+
+        Host first (DNS rebinding), then the login, if there is one.
+        """
+        if not host_allowed(self.headers.get("Host")):
+            self._misdirected()
+            return False
+        lg = login()
+        if not lg.configured():
             return True
-        got = self.headers.get("Authorization", "")
-        if not got.startswith("Basic "):
+        ok = lg.check(self.headers.get("Authorization", ""), self.client_address[0])
+        if ok is None:
+            wait = lg.retry_after(self.client_address[0])
+            b = f"too many failed logins; try again in {wait} s".encode()
+            self.send_response(429)
+            self.send_header("Retry-After", str(wait))
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
             return False
-        try:
-            given = base64.b64decode(got[6:]).decode("utf-8", "replace")
-        except Exception:
-            return False
-        # compare_digest: the comparison must not leak the password by timing.
-        return hmac.compare_digest(given, want)
+        if not ok:
+            self._challenge()
+        return ok
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -1031,10 +1067,8 @@ class Handler(BaseHTTPRequestHandler):
         # reveals nothing.
         if path == "/healthz":
             return self._send(200, "ok", "text/plain")
-        if not host_allowed(self.headers.get("Host")):
-            return self._misdirected()
-        if not self._authorised():
-            return self._challenge()
+        if not self._gate():
+            return
         if path in ("/favicon.png", "/favicon.ico") and FAVICON_PNG:
             # /favicon.ico too: some browsers ask for it regardless of the <link>,
             # and every current one renders a PNG served from that path.
@@ -1063,10 +1097,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, page(rows, prs))
 
     def do_POST(self):
-        if not host_allowed(self.headers.get("Host")):
-            return self._misdirected()
-        if not self._authorised():
-            return self._challenge()
+        if not self._gate():
+            return
         # Refuse cross-site posts, so another page open in your browser can't act
         # through this panel.
         if not same_origin(self.headers):
@@ -1159,10 +1191,19 @@ def _safe(fn):
 
 
 if __name__ == "__main__":
-    require_auth_boundary(CFG["basic_auth"], os.environ.get("KPANEL_ALLOW_NO_AUTH", ""))
+    try:
+        login().validate()
+    except auth.LoginError as ex:
+        raise SystemExit(f"kPanel refuses to start: {ex}") from None
+    require_auth_boundary(auth_configured(), os.environ.get("KPANEL_ALLOW_NO_AUTH", ""))
+    if login().deprecated:
+        print("WARNING: " + re.sub(r"</?code>", "`", PLAINTEXT_WARNING), flush=True)
+    elif CFG["basic_auth"]:
+        print("WARNING: KPANEL_BASIC_AUTH is ignored because KPANEL_PASSWORD_HASH is set; "
+              "remove it from .env.", flush=True)
     port = int(os.environ.get("PORT", "8080"))
     print(f"kPanel on :{port}, settings {settings_mode()}, "
-          f"auth {'basic' if CFG['basic_auth'] else 'none (network is the boundary)'}, "
+          f"auth {('basic, plaintext (deprecated)' if login().deprecated else 'basic, argon2id') if auth_configured() else 'none (network is the boundary)'}, "
           f"rcon {CFG['rcon_host']}:{CFG['rcon_port']} password {'set' if CFG['rcon_password'] else 'from server.properties'}",
           flush=True)
     threading.Thread(target=sampler, daemon=True, name="history-sampler").start()

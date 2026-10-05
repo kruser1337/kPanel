@@ -159,6 +159,12 @@ services:
       # it is told how it is protected. Here: only this machine can reach it.
       # compose/lan.yml clears this and requires KPANEL_BASIC_AUTH instead.
       KPANEL_ALLOW_NO_AUTH: "1"
+      # The login, when there is one: an argon2id hash, never the password.
+      # Make it with `docker compose exec kpanel python hashpw.py`.
+      KPANEL_USER: "${KPANEL_USER:-admin}"
+      KPANEL_PASSWORD_HASH: "${KPANEL_PASSWORD_HASH:-}"
+      # Deprecated: the password in plain text, user:password. Still works, with
+      # a warning on every page; kPanel 0.4 refuses it.
       KPANEL_BASIC_AUTH: "${KPANEL_BASIC_AUTH:-}"
       # Without a login the panel answers only to localhost, so a web page can't
       # point its own domain at this machine and drive the panel (DNS
