@@ -185,6 +185,14 @@ port-forward 8080, and don't put it behind a public reverse proxy unless that
 proxy adds TLS and its own authentication. `compose/lan.yml` is plain HTTP:
 fine at home, not on shared or public Wi-Fi.
 
+**Wrong passwords.** Five in a row from one address start a backoff that
+doubles up to five minutes, and past 30 failed logins a minute from all
+addresses together, everyone not already logged in waits a minute. A login
+that already worked keeps working for ten minutes regardless. Behind NAT or a
+reverse proxy (Coolify's included) every client has the same address, so the
+per-address limit is in effect global too: someone guessing can keep you
+waiting until they stop.
+
 **What is hashed, what is stored, and why.**
 
 | Secret | How it is kept | Why |

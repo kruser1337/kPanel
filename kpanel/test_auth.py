@@ -144,6 +144,58 @@ class Backoff(unittest.TestCase):
         self.assertTrue(self.lg.check(good, "10.0.0.9"))       # cached: still logged in
         self.assertTrue(self.lg.check(header("admin", PASSWORD), "10.0.0.7"))  # other client
 
+    def attack(self):
+        for i in range(auth.GLOBAL_FAILURES):
+            self.assertFalse(self.lg.check(header("admin", "guess"), f"2001:db8::{i}"))
+
+    def test_many_addresses_share_one_global_budget(self):
+        """N-04: one guess each from many addresses (IPv6) is no way around it."""
+        self.attack()
+        # every client not yet logged in now waits, the right password included
+        self.assertIsNone(self.lg.check(header("admin", "next-guess"), "2001:db8::ffff"))
+        self.assertIsNone(self.lg.check(header("admin", PASSWORD), "10.0.0.2"))
+        self.assertEqual(self.lg.retry_after("10.0.0.2"), auth.GLOBAL_WINDOW)
+        # refused attempts aren't verified, so they don't extend the wait
+        self.clock += auth.GLOBAL_WINDOW
+        self.assertEqual(self.lg.retry_after("10.0.0.2"), 0)
+        self.assertTrue(self.lg.check(header("admin", PASSWORD), "10.0.0.2"))
+
+    def test_the_global_budget_spares_a_working_session(self):
+        good = header("admin", PASSWORD)
+        self.assertTrue(self.lg.check(good, "10.0.0.1"))  # logged in before the attack
+        self.attack()
+        self.assertTrue(self.lg.check(good, "10.0.0.1"))
+
+    def test_a_slow_trickle_stays_under_the_global_budget(self):
+        for i in range(3 * auth.GLOBAL_FAILURES):
+            self.clock += auth.GLOBAL_WINDOW / auth.GLOBAL_FAILURES + 0.1
+            self.assertFalse(self.lg.check(header("admin", "guess"), f"2001:db8::{i}"))
+        self.assertTrue(self.lg.check(header("admin", PASSWORD), "10.0.0.2"))
+
+    def test_the_failure_memory_is_bounded(self):
+        """N-04: entries younger than an hour used to be kept, so a stream of
+        addresses grew the dict without bound in a 96 MB container."""
+        n = auth.MAX_CLIENTS + 500
+        for i in range(n):
+            self.clock += auth.GLOBAL_WINDOW / auth.GLOBAL_FAILURES + 0.01  # stay under the global cap
+            self.lg.check(header("admin", "guess"), f"2001:db8::{i:x}")
+        self.assertEqual(len(self.lg._fails), auth.MAX_CLIENTS)
+        self.assertLessEqual(len(self.lg._recent), auth.GLOBAL_FAILURES)
+        self.assertIn(f"2001:db8::{n - 1:x}", self.lg._fails)      # the newest kept
+        self.assertNotIn("2001:db8::0", self.lg._fails)             # the oldest forgotten
+
+    def test_a_repeat_offender_is_not_the_one_forgotten(self):
+        """LRU, not FIFO: a client that keeps failing stays remembered."""
+        self.fail(auth.FREE_FAILURES, "10.6.6.6")
+        for i in range(auth.MAX_CLIENTS):
+            self.clock += auth.GLOBAL_WINDOW / auth.GLOBAL_FAILURES + 0.01
+            self.lg.check(header("admin", "guess"), f"2001:db8::{i:x}")
+            if i % 1000 == 0:
+                self.clock += auth.MAX_BACKOFF
+                self.fail(1, "10.6.6.6")
+        self.assertIn("10.6.6.6", self.lg._fails)
+        self.assertGreater(self.lg.retry_after("10.6.6.6"), 0)
+
 
 class HashPw(unittest.TestCase):
     def run_main(self, stdin):

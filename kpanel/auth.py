@@ -15,6 +15,7 @@ warning; 0.4 refuses it.
 """
 
 import base64
+import collections
 import hmac
 import os
 import secrets
@@ -32,6 +33,16 @@ EXAMPLE_PASSWORDS = {"change-me-to-something-long", "change-me-too", "a-long-pas
 CACHE_SECONDS = 600
 FREE_FAILURES = 5        # wrong passwords before backing off
 MAX_BACKOFF = 300        # seconds
+# Across all clients: past this many failed checks a minute, every client that
+# isn't already logged in waits. Per-client backoff alone means nothing to an
+# attacker with many addresses (IPv6). The other way round, behind NAT or a
+# reverse proxy every client has the proxy's address, so both limits act on
+# everyone at once: an attacker can keep a not-yet-logged-in owner waiting.
+GLOBAL_FAILURES = 30
+GLOBAL_WINDOW = 60       # seconds
+# Clients whose failures are remembered; the least recently failing go first.
+# Bounds the memory a stream of addresses can take (the container has 96 MB).
+MAX_CLIENTS = 4096
 _VERIFYING = threading.BoundedSemaphore(2)
 
 
@@ -78,7 +89,8 @@ class Login:
             self.user, self.plaintext = u.encode(), pw.encode()
         self._key = secrets.token_bytes(32)
         self._ok = {}          # HMAC of a verified header -> expiry
-        self._fails = {}       # client -> (failures, time of last failure)
+        self._fails = collections.OrderedDict()  # client -> (failures, time of last), LRU
+        self._recent = collections.deque(maxlen=GLOBAL_FAILURES)  # times of the latest failures
         self._lock = threading.Lock()
 
     def configured(self) -> bool:
@@ -109,12 +121,14 @@ class Login:
 
     def retry_after(self, client: str) -> int:
         """Seconds this client must wait before its next attempt counts; 0 if none."""
+        now = time.monotonic()
         with self._lock:
             n, last = self._fails.get(client, (0, 0.0))
-        if n < FREE_FAILURES:
-            return 0
-        wait = min(2 ** (n - FREE_FAILURES), MAX_BACKOFF)
-        return max(0, int(last + wait - time.monotonic() + 0.999))
+            full = len(self._recent) == GLOBAL_FAILURES
+            oldest = self._recent[0] if full else 0.0
+        mine = last + min(2 ** (n - FREE_FAILURES), MAX_BACKOFF) if n >= FREE_FAILURES else 0.0
+        everyone = oldest + GLOBAL_WINDOW if full else 0.0
+        return max(0, int(max(mine, everyone) - now + 0.999))
 
     def check(self, header: str, client: str = ""):
         """True if the Authorization header carries this login, False if not, and
@@ -135,10 +149,11 @@ class Login:
                 self._ok[mac] = now + CACHE_SECONDS
                 self._fails.pop(client, None)
             else:
-                n, _ = self._fails.get(client, (0, 0.0))
-                if len(self._fails) > 1000:  # forget long-idle clients
-                    self._fails = {c: v for c, v in self._fails.items() if now - v[1] < 3600}
-                self._fails[client] = (n + 1, now)
+                n, _ = self._fails.pop(client, (0, 0.0))
+                self._fails[client] = (n + 1, now)  # (re)inserted last: most recent
+                while len(self._fails) > MAX_CLIENTS:
+                    self._fails.popitem(last=False)
+                self._recent.append(now)
         return ok
 
     def _matches(self, user: bytes, password: bytes) -> bool:

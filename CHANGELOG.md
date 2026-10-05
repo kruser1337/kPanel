@@ -47,7 +47,9 @@ git pull && docker compose up -d --build
 - Lower-severity fixes:
   - Cross-site posts from browsers that don't send fetch metadata (Safari
     before 16.4) are refused.
-  - Five wrong passwords in a row from one address start a backoff (HTTP 429).
+  - Five wrong passwords in a row from one address start a backoff (HTTP 429),
+    and more than 30 failed logins a minute from all addresses together make
+    everyone not already logged in wait. The memory this takes is bounded.
   - The example passwords from `.env.example` are refused.
   - Malformed or stalled requests can no longer tie up the panel.
   - The panel's pages have a Content Security Policy.
@@ -65,9 +67,10 @@ git pull && docker compose up -d --build
   only `server.properties`, but the server creates its files group-writable,
   so code that takes over the panel can write into `plugins/` and so run code
   in the server. Keep the panel behind its login or on this machine.
-- **The login backoff counts per address.** Behind NAT or a reverse proxy,
-  all clients share one address, so one attacker can keep everyone at 429
-  for a while. There is no cap across addresses.
+- **Someone guessing passwords can keep you waiting.** Behind NAT or a
+  reverse proxy all clients share one address, and the global limit acts on
+  everyone anyway, so while someone keeps guessing, a browser that isn't
+  already logged in gets HTTP 429. That is the price of the limit.
 - **Other containers in the stack reach the panel directly.** In the setups
   without a login (base file, Tailscale), a process in the server container
   can use the panel without going through the host check. It already has the
