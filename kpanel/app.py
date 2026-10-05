@@ -595,13 +595,23 @@ def peer_allowed(addr, refuse=None, only=None, resolve=resolve_peers):
 
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+# Never in a Host header a browser sends: userinfo ('localhost:8080@evil.example'
+# read as 'localhost'), a path, whitespace or control characters.
+MALFORMED_HOST = re.compile(r"[@/\\\s\x00-\x1f\x7f]")
+
+
+def host_malformed(value):
+    return bool(value) and bool(MALFORMED_HOST.search(value.strip()))
 
 
 def host_name(value):
     """The host part of a Host header or netloc, normalised: 'Example.COM.:8080' -> 'example.com'.
 
-    IPv6 keeps its brackets ('[::1]:8080' -> '[::1]'). '' for anything unusable.
+    IPv6 keeps its brackets ('[::1]:8080' -> '[::1]'). '' for anything unusable,
+    including a value no browser would send (see MALFORMED_HOST).
     """
+    if host_malformed(value):
+        return ""
     v = (value or "").strip().lower()
     if v.startswith("["):
         end = v.find("]")
@@ -624,6 +634,8 @@ def host_allowed(host_header, allowed=None, login=None):
     (the browser keeps credentials per origin), so any name is fine unless
     KPANEL_ALLOWED_HOSTS narrows it.
     """
+    if host_malformed(host_header):
+        return False  # in every mode: no browser sends it, so only a tool does
     allowed = CFG["allowed_hosts"] if allowed is None else allowed
     login = auth_configured() if login is None else login
     extra = {host_name(h) if h.strip() != "*" else "*" for h in allowed.split(",") if h.strip()}

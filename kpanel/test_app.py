@@ -538,6 +538,18 @@ class App(unittest.TestCase):
         self.assertFalse(app.host_allowed("panel.example.com", allowed="other.example", login=True))
         self.assertFalse(app.host_allowed("panel.example.com", allowed="", login=False))
 
+    def test_a_host_no_browser_sends_is_refused_in_every_mode(self):
+        """N-08: host_name split at the first ':', so 'localhost:8080@evil.example'
+        counted as localhost."""
+        bad = ("localhost:8080@evil.example", "localhost/evil", "localhost\\evil",
+               "local host", "localhost\tx", "localhost\x00")
+        for host in bad:
+            self.assertEqual(app.host_name(host), "", host)
+            for login, allowed in ((False, ""), (True, ""), (False, "*"), (True, "localhost")):
+                self.assertFalse(app.host_allowed(host, allowed=allowed, login=login), (host, login, allowed))
+        self.assertEqual(self.raw("GET", "/", {"Host": "localhost:8080@evil.example"})[0], 403)
+        self.assertEqual(self.raw("GET", "/", {"Host": "localhost:8080"})[0], 200)
+
     def test_healthz_answers_any_host(self):
         self.assertEqual(self.raw("GET", "/healthz", {"Host": "kpanel:8080"}), (200, "ok"))
 
