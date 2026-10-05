@@ -3,8 +3,10 @@
 ## 0.3.0 — security release
 
 A security audit of the panel, prompted by reports from users, found that the
-default setup could be taken over by a web page open on the same machine.
-Every finding is fixed here. **Please update**:
+default setup could be taken over by a web page open on the same machine. An
+independent check of the fixes then found gaps, which are closed here too.
+What is fixed, what is only partly fixed, and what is left for later is below.
+**Please update**:
 
 ```sh
 git pull && docker compose up -d --build
@@ -21,28 +23,60 @@ git pull && docker compose up -d --build
 - **The same attack reached the file manager, and through it the server
   (High).** The file manager (port 8081) had no login and could write to the
   server folder, plugins included. It is now served **by the panel, at
-  `/files/`**, behind the same checks and login, and has no port of its own.
+  `/files/`**, behind the panel's host check, login and cross-site check, and
+  has no port of its own. No other site may frame it (clickjacking), and a
+  file from the server folder opened in the browser runs sandboxed, not as
+  the panel.
 - **The panel password was stored in plain text (Medium).** It is now an
-  argon2id hash, `KPANEL_PASSWORD_HASH`, made by `hashpw.py`. Passwords with
-  non-ASCII characters (ä, é, …) now work; before, they could never log in.
+  argon2id hash, `KPANEL_PASSWORD_HASH`, made with
+  `docker compose run --rm --build hashpw`. Passwords with non-ASCII characters
+  (ä, é, …) now work; before, they could never log in. The plain-text
+  `KPANEL_BASIC_AUTH` still works in 0.3, with a warning on every page (see
+  *Not done yet*).
 - **A Minecraft plugin could read the panel's secrets (Medium).** The panel
-  shares the server's process namespace and user, so code in the server could
-  read the panel's environment: the login and a GitHub token. The panel now
-  hides its process from the server's.
+  shares the server's process namespace (for the CPU and memory graphs), and
+  ran as the same user, so code in the server could read the login hash and a
+  GitHub token from the environment of any panel process, and the password
+  from `hashpw.py`'s memory while it was being typed. The panel now runs as
+  its own user (uid 1001, in the server's group), and the kernel doesn't let
+  the server's processes read another user's environment or memory. `hashpw` runs in a
+  container of its own, outside the server's process namespace.
+- **The old file-manager password stayed on disk in plain text (Low).** With
+  `compose/lan.yml`, 0.2 stored it in the file manager's database. That
+  database is deleted on the first start of 0.3 (see Upgrading).
 - Lower-severity fixes:
   - Cross-site posts from browsers that don't send fetch metadata (Safari
     before 16.4) are refused.
-  - Five wrong passwords in a row start a backoff (HTTP 429).
+  - Five wrong passwords in a row from one address start a backoff (HTTP 429).
   - The example passwords from `.env.example` are refused.
   - Malformed or stalled requests can no longer tie up the panel.
-  - A Content Security Policy has been added.
+  - The panel's pages have a Content Security Policy.
   - The `Tailscale-User-Login` header is trusted only behind Tailscale.
   - `FILES_PASSWORD` is no longer pasted unescaped into the file manager's
-    YAML config.
+    YAML config (the file manager no longer has a password at all).
   - The panel container runs with no capabilities on a read-only filesystem,
-    and no container can gain privileges.
+    and no container can gain privileges through setuid binaries.
   - `itzg/mc-backup` is pinned instead of tracking `latest`.
   - CI actions are pinned by commit.
+
+### Not done yet, or only partly
+
+- **The panel can still write most of the server folder.** Settings saves
+  only `server.properties`, but the server creates its files group-writable,
+  so code that takes over the panel can write into `plugins/` and so run code
+  in the server. Keep the panel behind its login or on this machine.
+- **The login backoff counts per address.** Behind NAT or a reverse proxy,
+  all clients share one address, so one attacker can keep everyone at 429
+  for a while. There is no cap across addresses.
+- **Other containers in the stack reach the panel directly.** In the setups
+  without a login (base file, Tailscale), a process in the server container
+  can use the panel without going through the host check. It already has the
+  server's files and RCON, so this adds little.
+- **`KPANEL_BASIC_AUTH`, the plain-text login, is removed in 0.4**, not here,
+  so that upgrading never locks anyone out.
+- **No-login mode on Docker Engine older than 28** is not tested: those
+  versions let hosts on the same network segment reach ports published on
+  `127.0.0.1`. Use Docker 28 or newer, or a login.
 
 Nothing secret was ever committed to this repository; no key needs rotating
 because of kPanel itself.
@@ -54,7 +88,8 @@ because of kPanel itself.
   **Files** link); update your bookmark.
 - **With `compose/lan.yml` (`KPANEL_BASIC_AUTH` in `.env`):** your login keeps
   working, and every page shows a reminder until you swap it for a hash:
-  1. `docker compose exec kpanel python hashpw.py`
+  1. `docker compose run --rm --build hashpw` (any machine with Docker and
+     this repository will do; the stack needn't be running)
   2. In `.env`, replace the `KPANEL_BASIC_AUTH=…` line with the line it prints,
      **including its single quotes**.
   3. `docker compose -f docker-compose.yml -f compose/lan.yml up -d`
@@ -80,11 +115,27 @@ because of kPanel itself.
   ```
 - **With `compose/tailscale.yml`:** nothing to do. The file manager moves from
   `:8443` to `https://<name>.<tailnet>/files/`.
-- **Coolify, or any compose file you built by hand:** an old file keeps working
-  as it is. To get the fixes:
-  - Copy the `filebrowser` service and the `FILES_UPSTREAM`,
-    `KPANEL_ALLOWED_HOSTS` and `KPANEL_TRUST_TS_HEADERS` lines from the new
-    files (see [`docs/coolify.md`](docs/coolify.md)).
+- **Everyone:** the dashboard's graphs start over once. The panel now runs as
+  its own user, which can't write the old `kpanel-data` volume, so its history
+  (one day at most) moves to a new volume, `kpanel-state`. The old one can go:
+  `docker volume ls --filter name=kpanel-data`, then `docker volume rm` the
+  name it lists.
+- **Plugins you don't fully trust?** Before 0.3, code in the server could read
+  the panel's environment: `KPANEL_BASIC_AUTH` and, in git mode, the GitHub
+  token. If that worries you, choose a new panel password and replace the
+  token. The same applies if you ran a pre-release 0.3.0 from the
+  `security-hardening` branch and made your hash there with
+  `docker compose exec kpanel python hashpw.py`.
+- **Coolify, or any compose file you built by hand:** an old file keeps
+  working with the new panel image, except that dashboard history is no
+  longer saved across restarts (the log says so once). To get the fixes:
+  - Copy the `filebrowser` and `hashpw` services, the kpanel volume line
+    `kpanel-state:/var/lib/kpanel` (and `kpanel-state:` under `volumes:`), and
+    the `FILES_UPSTREAM`, `KPANEL_ALLOWED_HOSTS` and `KPANEL_TRUST_TS_HEADERS`
+    lines from the new files (see [`docs/coolify.md`](docs/coolify.md)).
+  - Settings writes `server.properties` through the server's group, so the
+    file must stay group-writable, as the server creates it. If Settings says
+    otherwise, run the `chmod` it names.
   - If you add `KPANEL_ALLOWED_HOSTS` with the wrong name, the panel shows a
     page naming the one to add.
 - **Opening the panel by a LAN name or IP without a login?** That now gets a

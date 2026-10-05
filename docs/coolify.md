@@ -52,7 +52,12 @@ carry its changes to `docker-compose.yml` over into `compose/coolify.yml` (image
 - **Never rename a volume key.** Coolify names volumes `<app-uuid>_<key>`
   (`…_mc-data` is your world). A renamed key is a new, empty volume: a new
   world. Changing the *compose location* of the same Application is safe,
-  because the UUID and keys stay the same.
+  because the UUID and keys stay the same. (kPanel 0.3 itself replaces
+  `kpanel-data` with `kpanel-state` on purpose: the panel's new user can't
+  write the old volume. It holds only the dashboard graphs, which start over.)
+- **The `hashpw` service** has a profile, so Coolify skips it, as it should:
+  it is a one-off tool. Make the login hash in a local checkout with
+  `docker compose run --rm --build hashpw`; the hash isn't tied to the host.
 - **A new `${VARIABLE}` arrives empty.** Coolify creates each variable when a
   deploy first parses the file, with no value, so the deploy that introduces it
   runs without it. Merge, set the value, then deploy again.

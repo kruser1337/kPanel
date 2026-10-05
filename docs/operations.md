@@ -212,7 +212,7 @@ docker compose up -d --build
 
 Some releases need a step of your own; [`CHANGELOG.md`](../CHANGELOG.md) says
 which, under **Upgrading**. (0.2 → 0.3: replace `KPANEL_BASIC_AUTH` with a
-password hash, if you use one.)
+password hash, if you use one; the dashboard graphs start over once.)
 
 **Minecraft / Paper:** the version is pinned in `docker-compose.yml`
 (`VERSION`, `PAPER_BUILD`, and `PAPER_CHANNEL` for beta builds). Never let it
