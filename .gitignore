@@ -6,3 +6,5 @@ __pycache__/
 kpanel/.venv/
 # Security audit scratch: tool output and PoCs, never published.
 audit/
+# Independent verification of a release: evidence, scratch and plans, never published.
+verify/
