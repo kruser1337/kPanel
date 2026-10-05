@@ -7,6 +7,8 @@ COPY requirements.txt /tmp/
 RUN pip install --no-cache-dir --only-binary=argon2-cffi-bindings,cffi -r /tmp/requirements.txt
 
 WORKDIR /app
+# The root filesystem is read-only at run time (compose), so no .pyc files.
+ENV PYTHONDONTWRITEBYTECODE=1
 COPY app.py auth.py hashpw.py compose_edit.py gamerules.py github.py history.py procstats.py rcon.py release.py settings.py ui.py \
      properties_meta.json gamerules_meta.json paper-logo.png favicon.png favicon.LICENSE.txt ui.LICENSE.txt ./
 

@@ -1222,6 +1222,28 @@ class Handler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} {fmt % args}", flush=True)
 
 
+PR_SET_DUMPABLE = 4
+
+
+def make_undumpable(libc=None):
+    """Hide this process from the server it shares a PID namespace with.
+
+    kpanel runs as uid 1000 in mc's PID namespace (for the CPU and memory
+    graphs), and so does the server, plugins included. Same uid means a plugin
+    could read /proc/<kpanel>/environ, so the login hash and the GitHub token,
+    and browse /proc/<kpanel>/root. A non-dumpable process's /proc entries
+    belong to root instead, which closes all of that. Linux only; elsewhere
+    (tests on a laptop) there is nothing to do. Returns whether it took.
+    """
+    try:
+        if libc is None:
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+    except (OSError, AttributeError):
+        return False
+
+
 def _safe(fn):
     """Re-render after an error without letting a second failure hide the first."""
     try:
@@ -1231,6 +1253,9 @@ def _safe(fn):
 
 
 if __name__ == "__main__":
+    if not make_undumpable() and os.path.exists("/proc/self"):
+        print("WARNING: could not make the panel non-dumpable; the server could read its environment",
+              flush=True)
     try:
         login().validate()
     except auth.LoginError as ex:

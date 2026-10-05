@@ -22,6 +22,9 @@ services:
     # Paper 26.x needs Java 25; the java21 tag fails with UnsupportedClassVersionError.
     image: itzg/minecraft-server:stable-java25
     restart: unless-stopped
+    # No setuid binary in the container can gain privileges (itzg drops from
+    # root to uid 1000 without one, so this costs nothing).
+    security_opt: ["no-new-privileges:true"]
     tty: true
     stdin_open: true
     # The game port, on every interface: this is what players connect to.
@@ -71,8 +74,11 @@ services:
       - mc-data:/data
 
   mc-backup:
-    image: itzg/mc-backup
+    # Pinned, like the server: a broken or compromised latest would otherwise
+    # arrive with the next pull.
+    image: itzg/mc-backup:2026.9.3
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     environment:
       TZ: "${TZ:-Etc/UTC}"
       # Twice a day at fixed clock times, keeping the newest 4 (two days back).
@@ -101,6 +107,7 @@ services:
     # FileBrowser Quantum, the maintained fork of filebrowser/filebrowser.
     image: gtstef/filebrowser:1.5.6-stable-slim
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 384m
     # Published nowhere, and no login of its own: the panel serves it under
     # /files/ (FILES_UPSTREAM below), behind the panel's host check and login.
@@ -148,12 +155,19 @@ services:
     build:
       context: ./kpanel
     restart: unless-stopped
+    # The panel needs no Linux capability and writes only to its volumes, so
+    # it runs with none and a read-only root filesystem: code that gets in
+    # can't change the panel's own files or gain privileges.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 96m
     # Shares mc's process namespace to read the JVM's CPU and memory from /proc.
     # Deliberately not the Docker socket, which would expose every container's
     # environment on the host.
     pid: "service:mc"
-    # Loopback only. That is what makes running without a login safe here.
+    # Loopback only. That, with the panel's Host check against DNS rebinding
+    # (KPANEL_ALLOWED_HOSTS below), is what makes running without a login safe.
     ports:
       - "127.0.0.1:8080:8080"
     environment:

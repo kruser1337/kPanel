@@ -102,6 +102,23 @@ class Base(unittest.TestCase):
         self.assertNotIn("PAPER_CHANNEL", env)
         self.assertTrue(env["PAPER_BUILD"].isdigit())  # pinned, never floating
 
+    def test_the_panel_runs_capless_and_read_only(self):
+        """F-03/F-12: it needs no capability and writes only to its volumes."""
+        k = BASE["services"]["kpanel"]
+        self.assertTrue(k["read_only"])
+        self.assertEqual(k["cap_drop"], ["ALL"])
+
+    def test_no_service_can_gain_privileges(self):
+        for name, svc in {**BASE["services"], "tailscale": TAILSCALE["services"]["tailscale"]}.items():
+            self.assertIn("no-new-privileges:true", svc.get("security_opt", []), name)
+
+    def test_every_image_is_pinned(self):
+        """No implicit :latest: an upstream push must not change a running stack."""
+        for name, svc in {**BASE["services"], "tailscale": TAILSCALE["services"]["tailscale"]}.items():
+            if "image" in svc:
+                tag = svc["image"].rpartition(":")[2] if ":" in svc["image"] else ""
+                self.assertNotIn(tag, ("", "latest"), name)
+
     def test_the_base_carries_no_profiles(self):
         for name, svc in BASE["services"].items():
             self.assertIsNone(svc.get("profiles"), name)

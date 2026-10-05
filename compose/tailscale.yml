@@ -29,6 +29,7 @@ services:
   tailscale:
     image: tailscale/tailscale:v1.102.5
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     # No hostname: key. containerboot takes the device name from TS_HOSTNAME;
     # a container hostname equal to a service name (e.g. kpanel) collides in
     # the compose network's DNS and makes http://kpanel:8080 resolve to the

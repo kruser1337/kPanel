@@ -580,6 +580,21 @@ class App(unittest.TestCase):
         for crafted in ("x\n| injected | row |", "a b", "[click](http://evil)", "x" * 101):
             self.assertEqual(app.who_from({"Tailscale-User-Login": crafted}), "", crafted)
 
+    def test_the_panel_hides_itself_from_the_server_process(self):
+        """F-03: PR_SET_DUMPABLE=0, so a same-uid plugin can't read /proc/<kpanel>/environ."""
+        class Libc:
+            calls = []
+
+            def prctl(self, *args):
+                Libc.calls.append(args)
+                return 0
+        self.assertTrue(app.make_undumpable(Libc()))
+        self.assertEqual(Libc.calls, [(4, 0, 0, 0, 0)])
+
+        class NoPrctl:  # macOS and friends
+            pass
+        self.assertFalse(app.make_undumpable(NoPrctl()))
+
     def test_basic_auth_challenges_when_credentials_are_missing(self):
         app.CFG["basic_auth"] = "admin:hunter2"
         try:
