@@ -550,6 +550,16 @@ class App(unittest.TestCase):
         self.assertEqual(self.raw("GET", "/", {"Host": "localhost:8080@evil.example"})[0], 403)
         self.assertEqual(self.raw("GET", "/", {"Host": "localhost:8080"})[0], 200)
 
+    def test_the_server_header_names_no_versions(self):
+        """N-09: it said 'kPanel Python/3.13.x'."""
+        for path in ("/", "/healthz", "/nowhere"):
+            c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=5)
+            c.request("GET", path, headers={"Host": "localhost"})
+            r = c.getresponse()
+            r.read()
+            c.close()
+            self.assertEqual(r.getheader("Server"), "kPanel", path)
+
     def test_healthz_answers_any_host(self):
         self.assertEqual(self.raw("GET", "/healthz", {"Host": "kpanel:8080"}), (200, "ok"))
 

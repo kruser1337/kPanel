@@ -1092,6 +1092,10 @@ MAX_FORM = 200_000  # bytes; the Settings form is about 10 KB
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "kPanel"
+    sys_version = ""  # no "Python/3.13.x" in the Server header (N-09)
+
+    def version_string(self):
+        return self.server_version
     # Seconds a client may stall mid-request before its connection is dropped,
     # so slow or never-finished requests can't pin worker threads.
     timeout = 30
