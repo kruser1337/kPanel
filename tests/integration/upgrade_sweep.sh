@@ -67,7 +67,7 @@ wait_panel() { for _ in $(seq 60); do [[ $(login x) != 000 ]] && return 0; sleep
 
 echo "== $OLD_REF with compose/lan.yml and marker secrets"
 "${OLD[@]}" up -d --build >/dev/null 2>&1
-wait_started "${OLD[@]}" || { echo "FAIL: the old server never started" >&2; exit 1; }
+wait_started "${OLD[@]}" || { echo "FAIL: the old server never started; its log ends:" >&2; "${OLD[@]}" logs --tail 15 mc >&2; exit 1; }
 wait_panel
 old_login=$(login "$PANEL")
 "${OLD[@]}" exec -T mc rcon-cli op Notch >/dev/null 2>&1 || true
@@ -80,7 +80,7 @@ before=$("$DOCKER" run --rm -v "${P}_filebrowser-db:/v:ro" alpine:3 sh -c "grep 
 
 echo "== upgrade: git pull && docker compose up -d --build (same .env)"
 "${NEW[@]}" up -d --build >/dev/null 2>&1
-wait_started "${NEW[@]}" || { echo "FAIL: the server never started after the upgrade" >&2; exit 1; }
+wait_started "${NEW[@]}" || { echo "FAIL: the server never started after the upgrade; its log ends:" >&2; "${NEW[@]}" logs --tail 15 mc >&2; exit 1; }
 wait_panel
 plain_login=$(login "$PANEL")
 banner=$(curl -s -u "admin:$PANEL" -H 'Host: localhost' "http://127.0.0.1:$PORT/" | grep -c 'run --rm --build hashpw' || true)

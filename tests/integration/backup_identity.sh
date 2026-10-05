@@ -55,7 +55,8 @@ old_owner=$("${OLD[@]}" exec -T mc-backup stat -c '%u:%g' /backups /backups/worl
 echo "== the current stack on the same volumes"
 "${NEW[@]}" up -d --build >/dev/null 2>&1
 for _ in $(seq 100); do "${NEW[@]}" exec -T mc test -f /data/ops.json 2>/dev/null && break; sleep 3; done
-"${NEW[@]}" exec -T mc test -f /data/ops.json 2>/dev/null || { echo "FAIL: the server never started" >&2; exit 1; }
+"${NEW[@]}" exec -T mc test -f /data/ops.json 2>/dev/null ||
+  { echo "FAIL: the server never started; its log ends:" >&2; "${NEW[@]}" logs --tail 15 mc >&2; exit 1; }
 
 dir_owner=$(inb 'stat -c %u:%g /backups')
 crond=$(inb 'for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = crond ] && grep -E "^(Uid|CapEff|CapPrm|CapBnd):" $p/status; done' | awk '{print $1, $2}' | tr '\n' ' ')
@@ -73,8 +74,10 @@ echo "== backup now, watching the processes it starts"
   backup now >/tmp/now.log 2>&1 & bp=$!
   while kill -0 $bp 2>/dev/null; do
     for p in /proc/[0-9]*; do
-      u=$(awk "/^Uid:/{print \$2}" $p/status 2>/dev/null); c=$(awk "/^CapEff:/{print \$2}" $p/status 2>/dev/null)
-      [ "$u" = 1000 ] && echo "JOB $u $c $(tr "\0" " " < $p/cmdline 2>/dev/null | cut -c1-60)"
+      # one read of status: a process that exits in between must not show up half-read
+      st=$(cat $p/status 2>/dev/null) || continue
+      u=$(echo "$st" | awk "/^Uid:/{print \$2}"); c=$(echo "$st" | awk "/^CapEff:/{print \$2}")
+      [ "$u" = 1000 ] && [ -n "$c" ] && echo "JOB $u $c $(tr "\0" " " < $p/cmdline 2>/dev/null | cut -c1-60)"
     done
   done | sort -u >/tmp/jobs.txt
   wait $bp' >/dev/null 2>&1 || true
