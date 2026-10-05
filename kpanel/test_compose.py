@@ -72,8 +72,9 @@ class Base(unittest.TestCase):
         The heredoc is quoted and holds no variable at all."""
         script = BASE["services"]["filebrowser"]["entrypoint"][2]
         self.assertIn("<<'EOF'", script)
-        heredoc = script.split("<<'EOF'", 1)[1].split("\nEOF\n", 1)[0]
-        self.assertNotIn("$", heredoc)
+        # Not anywhere in the script either: Coolify users copy this block, and
+        # Coolify claims every dollar in a compose file as its own variable.
+        self.assertNotIn("$", script)
 
     def test_the_file_manager_drops_a_database_holding_a_password(self):
         """N-03: 0.2's lan.yml left FILES_PASSWORD in plain text in FileBrowser's

@@ -158,10 +158,12 @@ services:
         # which the noauth config above never rewrites. Without a login nothing
         # in the database is needed, so one holding a password is dropped
         # (FileBrowser recreates it). A fresh one stores "adminPassword":"".
-        db=/home/filebrowser/data/database.db
-        if [ -f "$$db" ] && grep -q -e '"adminPassword":"[^"]' -e '"noauth":false' "$$db"; then
-          rm -f "$$db" && echo "kPanel: removed the file manager's old database: it held a password"
+        # No variable on purpose: Coolify claims every dollar in a compose file.
+        cd /home/filebrowser/data
+        if [ -f database.db ] && grep -q -e '"adminPassword":"[^"]' -e '"noauth":false' database.db; then
+          rm -f database.db && echo "kPanel: removed the file manager's old database: it held a password"
         fi
+        cd /home/filebrowser
         # The server's umask: files it writes stay group-writable, so the panel
         # (group 1000) can still save a server.properties uploaded here.
         umask 002
