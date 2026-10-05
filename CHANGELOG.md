@@ -60,8 +60,24 @@ because of kPanel itself.
   3. `docker compose -f docker-compose.yml -f compose/lan.yml up -d`
 
   The file manager is now `http://<host>:8080/files/`, behind the panel login.
-  `FILES_PASSWORD` is no longer used; you can delete it. **0.4 will refuse to
-  start with `KPANEL_BASIC_AUTH`.**
+  `FILES_PASSWORD` is no longer used; delete it from `.env`. **0.4 will refuse
+  to start with `KPANEL_BASIC_AUTH`.**
+
+  **Your old file-manager password was also stored in plain text** inside the
+  file manager's own database (the `filebrowser-db` volume). On its first
+  start, 0.3 deletes that database (the log says "removed the file manager's
+  old database"); nothing in it is needed without a login. That is an ordinary
+  file deletion, not a secure erase, so **if you used that password anywhere
+  else, change it there**. To be sure no copy is left, or if you run the file
+  manager from a compose file of your own, remove the volume by hand (it is
+  recreated empty):
+
+  ```sh
+  docker compose down
+  docker volume ls --filter name=filebrowser-db   # e.g. kpanel_filebrowser-db
+  docker volume rm kpanel_filebrowser-db          # the name it listed
+  docker compose -f docker-compose.yml -f compose/lan.yml up -d
+  ```
 - **With `compose/tailscale.yml`:** nothing to do. The file manager moves from
   `:8443` to `https://<name>.<tailnet>/files/`.
 - **Coolify, or any compose file you built by hand:** an old file keeps working

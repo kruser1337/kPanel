@@ -72,7 +72,17 @@ class Base(unittest.TestCase):
         The heredoc is quoted and holds no variable at all."""
         script = BASE["services"]["filebrowser"]["entrypoint"][2]
         self.assertIn("<<'EOF'", script)
-        self.assertNotIn("$", script)
+        heredoc = script.split("<<'EOF'", 1)[1].split("\nEOF\n", 1)[0]
+        self.assertNotIn("$", heredoc)
+
+    def test_the_file_manager_drops_a_database_holding_a_password(self):
+        """N-03: 0.2's lan.yml left FILES_PASSWORD in plain text in FileBrowser's
+        database; noauth never rewrites that record. Proved on a real 0.2.2
+        volume by tests/integration/upgrade_filebrowser_db.sh."""
+        script = BASE["services"]["filebrowser"]["entrypoint"][2]
+        cleanup, start = script.index("database.db"), script.index("exec ./filebrowser")
+        self.assertLess(cleanup, start)
+        self.assertIn('"adminPassword":"[^"]', script)
 
     def test_only_the_game_is_published_to_the_network(self):
         wide = [(n, p) for n, s in BASE["services"].items() for p in s.get("ports", [])

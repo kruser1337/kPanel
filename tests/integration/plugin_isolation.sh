@@ -12,7 +12,7 @@
 #   A. while the kpanel healthcheck fires and while
 #      `docker compose exec kpanel python hashpw.py` (the 0.3.0 instruction)
 #      waits at its second prompt;
-#   B. while `docker compose run --rm hashpw` (the documented way since 0.3.1)
+#   B. while `docker compose run --rm hashpw` (the documented way)
 #      waits at its second prompt.
 #
 # Passes only if no marker is found anywhere, every kpanel process refused all
