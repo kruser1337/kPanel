@@ -23,7 +23,7 @@ host, 8080 is often taken already).
    - under `kpanel` → `environment`, set
      `COMPOSE_PATH: "compose/coolify.yml"`, so Settings' pull requests edit the
      file Coolify deploys,
-     `KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME}.${TS_TAILNET},kpanel"` (without a
+     `KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME}.${TS_TAILNET}"` (without a
      login the panel answers only to the names listed here; anything else gets
      a page saying which name to add), and `KPANEL_TRUST_TS_HEADERS: "1"` (the
      action log then names who made each change);

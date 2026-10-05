@@ -21,10 +21,9 @@ services:
       # tailscale serve tells the panel who is logged in to the tailnet, for the
       # action log; only trusted here, where nothing else can reach the panel.
       KPANEL_TRUST_TS_HEADERS: "1"
-      # The name the tailnet reaches it by; without a login, every other name is
-      # refused (see KPANEL_ALLOWED_HOSTS). kpanel: the sidecar's upstream, in
-      # case the proxy passes that on as the Host.
-      KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env},kpanel"
+      # The name the tailnet reaches it by (tailscale serve passes the browser's
+      # Host on); without a login, every other name is refused.
+      KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env}"
 
   tailscale:
     image: tailscale/tailscale:v1.102.5
