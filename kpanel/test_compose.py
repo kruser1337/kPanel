@@ -124,6 +124,29 @@ class Base(unittest.TestCase):
             self.assertIsNone(svc.get("profiles"), name)
 
 
+class Image(unittest.TestCase):
+    def test_the_image_copies_every_module_the_panel_imports(self):
+        """The Dockerfile lists its files; a module missing there passes every
+        test here and crashes the panel on start (it did, once: filesproxy.py)."""
+        import ast
+        here = pathlib.Path(__file__).parent
+        dockerfile = (here / "Dockerfile").read_text()
+        copy = dockerfile.split("COPY app.py", 1)[1].split("./\n", 1)[0]
+        copied = {"app.py"} | set(copy.replace("\\", " ").split())
+        local = {f.stem for f in here.glob("*.py")}
+        todo, seen = ["app.py", "hashpw.py"], set()
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            for node in ast.walk(ast.parse((here / name).read_text())):
+                mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                    [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
+                todo += [f"{m}.py" for m in mods if m in local]
+        self.assertEqual(seen - copied, set())
+
+
 LAN_TEXT = (ROOT / "compose" / "lan.yml").read_text()
 TAILSCALE_TEXT = (ROOT / "compose" / "tailscale.yml").read_text()
 TAILSCALE = yaml.load(TAILSCALE_TEXT, Loader=ComposeLoader)
