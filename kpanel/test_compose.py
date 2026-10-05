@@ -122,6 +122,16 @@ class Base(unittest.TestCase):
         for name, svc in {**BASE["services"], "tailscale": TAILSCALE["services"]["tailscale"]}.items():
             self.assertIn("no-new-privileges:true", svc.get("security_opt", []), name)
 
+    def test_backups_run_without_root_powers(self):
+        """N-06: mc-backup ran as root with Docker's default capabilities. crond
+        must stay root (the image requires it); the backups themselves don't."""
+        b = BASE["services"]["mc-backup"]
+        self.assertEqual(b["cap_drop"], ["ALL"])
+        self.assertEqual(sorted(b["cap_add"]), ["CHOWN", "SETGID", "SETUID"])
+        self.assertEqual(b["environment"]["CRON_BACKUP_UID"], "1000")
+        self.assertIn("chown 1000:1000 /backups", b["entrypoint"][-1])
+        self.assertIn("mc-data:/data:ro", b["volumes"])
+
     def test_every_image_is_pinned(self):
         """No implicit :latest: an upstream push must not change a running stack."""
         for name, svc in {**BASE["services"], "tailscale": TAILSCALE["services"]["tailscale"]}.items():

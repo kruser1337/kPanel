@@ -79,8 +79,19 @@ services:
     image: itzg/mc-backup:2026.9.3
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    # The image's cron scheduling refuses to run unless crond is root, so crond
+    # stays root, with only what it needs: CHOWN for the line below, SETUID and
+    # SETGID to start each backup as uid 1000 (CRON_BACKUP_UID), which then has
+    # no capability at all. /backups is handed to 1000 on every start: until
+    # 0.2 the backups were taken as root, so an existing volume is root's. The
+    # archives already in it stay root's and readable; pruning them needs only
+    # the directory.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    entrypoint: ["/bin/sh", "-c", "chown 1000:1000 /backups && exec /usr/bin/backup loop"]
     environment:
       TZ: "${TZ:-Etc/UTC}"
+      CRON_BACKUP_UID: "1000"
       # Twice a day at fixed clock times, keeping the newest 4 (two days back).
       # A cron schedule rather than an interval: an interval restarts with the
       # container, so frequent restarts would mean no backups at all.

@@ -64,6 +64,10 @@ git pull && docker compose up -d --build
     YAML config (the file manager no longer has a password at all).
   - The panel container runs with no capabilities on a read-only filesystem,
     and no container can gain privileges through setuid binaries.
+  - Backups run as uid 1000 with no capabilities. Only their scheduler stays
+    root (the backup image requires it), with three capabilities instead of
+    Docker's default set. The backups volume is handed to uid 1000 on start;
+    existing archives keep working.
   - `itzg/mc-backup` is pinned instead of tracking `latest`.
   - CI actions are pinned by commit.
 
