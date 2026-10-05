@@ -88,12 +88,15 @@ cp .env.example .env    # uncomment and fill in the lines you need
 docker compose -f docker-compose.yml -f compose/lan.yml up -d
 ```
 
-**The panel login is a hash, not a password.** With the stack running (the
-base file alone is fine), make it with
+**The panel login is a hash, not a password.** Make it with
 
 ```bash
-docker compose exec kpanel python hashpw.py
+docker compose run --rm --build hashpw
 ```
+
+This runs in a container of its own, with no network and outside the
+server's process namespace, so the stack needn't be running, and any machine
+with Docker and this repository will do.
 
 It asks for a password (12 characters or more) and prints a line like
 `KPANEL_PASSWORD_HASH='$argon2id$v=19$…'`. Paste it into `.env` **with its

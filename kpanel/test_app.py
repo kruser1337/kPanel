@@ -392,6 +392,44 @@ class App(unittest.TestCase):
         self.assertEqual(after["rcon.password"], before["rcon.password"])  # secrets untouched
         self.assertEqual(FakeGitHub.opened, [])
 
+    def test_file_mode_writes_in_place_without_needing_a_writable_directory(self):
+        """N-01: the panel is uid 1001 in group 1000, and /data is 0750: only the
+        file's own group write bit is there, so no temp file and rename."""
+        props = self.file_mode()
+        inode = props.stat().st_ino
+        os.chmod(props.parent, 0o500)  # the directory can't take a new entry
+        self.addCleanup(os.chmod, props.parent, 0o700)
+        status, body = self.post("/save", {"p:motd": "in place"})
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(st.parse_properties(props.read_text())["motd"], "in place")
+        self.assertEqual(props.stat().st_ino, inode)
+        self.assertEqual(os.listdir(props.parent), ["server.properties"])
+        # a shorter file leaves no tail of the old one behind
+        before = props.read_text()
+        self.post("/save", {"p:motd": "x"})
+        self.assertEqual(st.parse_properties(props.read_text()).keys(), st.parse_properties(before).keys())
+
+    def test_file_mode_refuses_to_follow_a_planted_symlink(self):
+        """The server owns /data: a symlink in place of server.properties must
+        not turn the panel's write into a write somewhere else."""
+        props = self.file_mode()
+        target = props.parent / "elsewhere"
+        target.write_text(props.read_text())
+        props.unlink()
+        props.symlink_to(target)
+        before = target.read_text()
+        status, _ = self.post("/save", {"p:motd": "redirected"})
+        self.assertEqual(status, 502)
+        self.assertEqual(target.read_text(), before)
+
+    def test_file_mode_explains_a_file_that_is_not_group_writable(self):
+        props = self.file_mode()
+        os.chmod(props, 0o444)
+        self.addCleanup(os.chmod, props, 0o644)
+        status, body = self.post("/save", {"p:motd": "nope"})
+        self.assertEqual(status, 502)
+        self.assertIn("chmod g+w", body)
+
     def test_file_mode_validation_errors_write_nothing(self):
         props = self.file_mode()
         before = props.read_text()
@@ -580,20 +618,15 @@ class App(unittest.TestCase):
         for crafted in ("x\n| injected | row |", "a b", "[click](http://evil)", "x" * 101):
             self.assertEqual(app.who_from({"Tailscale-User-Login": crafted}), "", crafted)
 
-    def test_the_panel_hides_itself_from_the_server_process(self):
-        """F-03: PR_SET_DUMPABLE=0, so a same-uid plugin can't read /proc/<kpanel>/environ."""
-        class Libc:
-            calls = []
-
-            def prctl(self, *args):
-                Libc.calls.append(args)
-                return 0
-        self.assertTrue(app.make_undumpable(Libc()))
-        self.assertEqual(Libc.calls, [(4, 0, 0, 0, 0)])
-
-        class NoPrctl:  # macOS and friends
-            pass
-        self.assertFalse(app.make_undumpable(NoPrctl()))
+    # N-01: the boundary against the server is the uid, proved by
+    # tests/integration/plugin_isolation.sh against a running stack. Here: the
+    # panel warns when it runs as the server files' owner.
+    def test_the_panel_notices_when_it_shares_the_server_uid(self):
+        with tempfile.NamedTemporaryFile() as f:
+            owner = os.stat(f.name).st_uid
+            self.assertTrue(app.shares_server_uid(f.name, uid=owner))
+            self.assertFalse(app.shares_server_uid(f.name, uid=owner + 1))
+        self.assertFalse(app.shares_server_uid("/nonexistent/server.properties", uid=0))
 
     def test_basic_auth_challenges_when_credentials_are_missing(self):
         app.CFG["basic_auth"] = "admin:hunter2"
@@ -642,7 +675,7 @@ class App(unittest.TestCase):
             b"admin:hunter2-is-long").decode()})
         self.assertEqual(status, 200)
         self.assertIn("stored in plain text (KPANEL_BASIC_AUTH)", body)
-        self.assertIn("python hashpw.py", body)
+        self.assertIn("docker compose run --rm --build hashpw", body)
 
     def test_healthz_stays_reachable_for_the_container_healthcheck(self):
         app.CFG["basic_auth"] = "admin:hunter2"

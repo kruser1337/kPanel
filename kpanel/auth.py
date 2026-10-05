@@ -1,8 +1,9 @@
 """The panel's login: an argon2id hash, checked against HTTP basic auth.
 
 The password itself is never stored: .env holds KPANEL_PASSWORD_HASH, made by
-hashpw.py. Anyone who reads .env, `docker inspect` or a pasted compose config
-gets a hash, not a password that also opens their other accounts.
+hashpw.py (`docker compose run --rm --build hashpw`). Anyone who reads .env,
+`docker inspect` or a pasted compose config gets a hash, not a password that
+also opens their other accounts.
 
 Basic auth sends the password with every request, and the container has 96 MB,
 so a verified Authorization header is remembered for a while (by an HMAC under

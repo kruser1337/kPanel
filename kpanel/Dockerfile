@@ -12,12 +12,16 @@ ENV PYTHONDONTWRITEBYTECODE=1
 COPY app.py auth.py hashpw.py compose_edit.py filesproxy.py gamerules.py github.py history.py procstats.py rcon.py release.py settings.py ui.py \
      properties_meta.json gamerules_meta.json paper-logo.png favicon.png favicon.LICENSE.txt ui.LICENSE.txt ./
 
-# uid 1000, like the itzg image, so the panel can read and write /data/server.properties.
-RUN adduser -D -u 1000 admin
-# Dashboard history lives here (volume kpanel-data). Owned by 1000 in the image,
-# so a fresh named volume mounted over it inherits that ownership.
-RUN mkdir -p /var/lib/kpanel && chown 1000:1000 /var/lib/kpanel
-USER 1000
+# uid 1001 in group 1000. The server (itzg) runs as 1000:1000 and the panel shares
+# its process namespace for the CPU and memory graphs: a different uid means no
+# server process, plugins included, can read any panel process's environment or
+# memory. Group 1000 lets the panel write server.properties (0664, the server's
+# default) and read the rest of /data.
+RUN addgroup -g 1000 mc && adduser -D -u 1001 -G mc admin
+# Dashboard history lives here (volume kpanel-state). Owned by the panel in the
+# image, so a fresh named volume mounted over it inherits that ownership.
+RUN mkdir -p /var/lib/kpanel && chown 1001:1000 /var/lib/kpanel
+USER 1001:1000
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

@@ -142,6 +142,9 @@ services:
           methods:
             noauth: true
         EOF
+        # The server's umask: files it writes stay group-writable, so the panel
+        # (group 1000) can still save a server.properties uploaded here.
+        umask 002
         exec ./filebrowser -c /tmp/config.yaml
     # uid 1000, like the server, so files it writes stay readable. Don't edit
     # world/ files while players are online.
@@ -164,7 +167,10 @@ services:
     mem_limit: 96m
     # Shares mc's process namespace to read the JVM's CPU and memory from /proc.
     # Deliberately not the Docker socket, which would expose every container's
-    # environment on the host.
+    # environment on the host. The image runs as uid 1001 (group 1000), not the
+    # server's 1000: the kernel lets no server process, plugins included, read
+    # the environment or memory of any process here, the healthcheck and
+    # `docker compose exec` included.
     pid: "service:mc"
     # Loopback only. That, with the panel's Host check against DNS rebinding
     # (KPANEL_ALLOWED_HOSTS below), is what makes running without a login safe.
@@ -176,7 +182,7 @@ services:
       # compose/lan.yml clears this and requires KPANEL_BASIC_AUTH instead.
       KPANEL_ALLOW_NO_AUTH: "1"
       # The login, when there is one: an argon2id hash, never the password.
-      # Make it with `docker compose exec kpanel python hashpw.py`.
+      # Make it with `docker compose run --rm --build hashpw` (service below).
       KPANEL_USER: "${KPANEL_USER:-admin}"
       KPANEL_PASSWORD_HASH: "${KPANEL_PASSWORD_HASH:-}"
       # Deprecated: the password in plain text, user:password. Still works, with
@@ -202,16 +208,38 @@ services:
       # What players type to connect; the dashboard shows and pings it.
       PUBLIC_HOST: "${MC_PUBLIC_HOST:-localhost}"
       GAME_HOST: "mc"
-    # Writable for one file: Settings saves server.properties. Everything else
-    # the panel changes goes through RCON.
+    # Read-write, and not for one file only: Settings writes server.properties
+    # in place (everything else goes through RCON), but the server creates its
+    # files group-writable, so group 1000 can write nearly all of /data,
+    # plugins/ included. Code that takes over the panel can run code in the
+    # server. Keep the panel behind its login or on loopback.
     volumes:
       - mc-data:/data
       - mc-backups:/backups:ro
-      # The panel's only state: dashboard history.
-      - kpanel-data:/var/lib/kpanel
+      # The panel's only state: dashboard history. (kpanel-data before 0.3.1,
+      # owned by the old uid 1000; a fresh volume gets the image's ownership.)
+      - kpanel-state:/var/lib/kpanel
+
+  # Makes the panel's login hash. Not started by `up`; run it when you need it:
+  #
+  #   docker compose run --rm --build hashpw
+  #
+  # It asks for the password and prints the KPANEL_PASSWORD_HASH line for .env.
+  # A container of its own: no network, no volumes, no environment, and not in
+  # the server's process namespace, so nothing in the server can watch the
+  # password being typed.
+  hashpw:
+    build:
+      context: ./kpanel
+    profiles: [tools]
+    command: ["python", "hashpw.py"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
 volumes:
   mc-data:
   mc-backups:
   filebrowser-db:
-  kpanel-data:
+  kpanel-state:

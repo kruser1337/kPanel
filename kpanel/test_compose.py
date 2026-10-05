@@ -120,8 +120,32 @@ class Base(unittest.TestCase):
                 self.assertNotIn(tag, ("", "latest"), name)
 
     def test_the_base_carries_no_profiles(self):
+        """Coolify silently skips a profiled service. Only hashpw, a one-shot
+        tool that `up` must not start anyway, may have one."""
         for name, svc in BASE["services"].items():
-            self.assertIsNone(svc.get("profiles"), name)
+            if name != "hashpw":
+                self.assertIsNone(svc.get("profiles"), name)
+            self.assertNotIn("hashpw", svc.get("depends_on", {}), name)
+
+    def test_the_password_is_hashed_outside_the_servers_reach(self):
+        """N-01: in kpanel's container, hashpw.py sat in the server's process
+        namespace with the password in memory. Its own service has no network,
+        no volumes, no environment and its own PID namespace."""
+        h = BASE["services"]["hashpw"]
+        self.assertEqual(h["profiles"], ["tools"])
+        self.assertEqual(h["network_mode"], "none")
+        for key in ("pid", "environment", "env_file", "volumes", "ports"):
+            self.assertNotIn(key, h)
+        self.assertTrue(h["read_only"])
+        self.assertEqual(h["cap_drop"], ["ALL"])
+
+    def test_the_panel_does_not_run_as_the_servers_uid(self):
+        """N-01: it shares the server's PID namespace, so a shared uid would let
+        a plugin read every panel process's environment."""
+        dockerfile = (ROOT / "kpanel" / "Dockerfile").read_text()
+        self.assertIn("USER 1001:1000", dockerfile)
+        self.assertNotIn("user", BASE["services"]["kpanel"])  # no override back to 1000
+        self.assertIn("kpanel-state:/var/lib/kpanel", BASE["services"]["kpanel"]["volumes"])
 
 
 class Image(unittest.TestCase):

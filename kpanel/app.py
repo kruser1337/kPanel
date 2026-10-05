@@ -217,16 +217,28 @@ def load_file():
 
 
 def save_file(wanted: dict, who: str):
-    """Write the validated values into server.properties, atomically."""
+    """Write the validated values into server.properties, in place.
+
+    The panel runs as its own uid in the server's group (so the server can't
+    read the panel's processes), and /data is not group-writable: there is no
+    temp file and rename, only the file's own group write bit. One write of a
+    ~2 KB file, then truncate and fsync. O_NOFOLLOW: the server owns /data, so a
+    symlink planted in place of the file must not redirect the write.
+    """
     path = CFG["props"]
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    new = st.write_properties(text, wanted)
-    tmp = f"{path}.kpanel-tmp"
-    with open(tmp, "w", encoding="ascii") as f:
+    new = st.write_properties(text, wanted).encode("ascii")
+    try:
+        fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+    except PermissionError:
+        raise OSError(f"The panel may not write {path}: it needs the file group-writable "
+                      f"(the server's default). Fix it with: docker compose exec mc chmod g+w {path}") from None
+    with os.fdopen(fd, "wb") as f:
         f.write(new)
-    os.chmod(tmp, os.stat(path).st_mode & 0o777)
-    os.replace(tmp, path)  # never a half-written file, even if the panel dies mid-save
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
     for k, v in sorted(wanted.items()):
         record(who, f"set {k}={v}", "saved to server.properties")
 
@@ -507,7 +519,7 @@ def auth_configured():
 
 PLAINTEXT_WARNING = (
     "The panel password is stored in plain text (KPANEL_BASIC_AUTH). Run "
-    "<code>docker compose exec kpanel python hashpw.py</code>, put the line it prints "
+    "<code>docker compose run --rm --build hashpw</code>, put the line it prints "
     "into .env in place of KPANEL_BASIC_AUTH, and run <code>docker compose up -d</code>. "
     "kPanel 0.4 will refuse to start with KPANEL_BASIC_AUTH.")
 
@@ -523,7 +535,8 @@ def require_auth_boundary(basic_auth, allow_no_auth):
         return
     raise SystemExit(
         "kPanel refuses to start without an access boundary.\n"
-        "  Set KPANEL_PASSWORD_HASH (from `python hashpw.py`) to require a login, or\n"
+        "  Set KPANEL_PASSWORD_HASH (from `docker compose run --rm --build hashpw`)\n"
+        "  to require a login, or\n"
         "  set KPANEL_ALLOW_NO_AUTH=1 if the panel is only reachable over a\n"
         "  tailnet or VPN and that network is the boundary.")
 
@@ -1226,14 +1239,14 @@ PR_SET_DUMPABLE = 4
 
 
 def make_undumpable(libc=None):
-    """Hide this process from the server it shares a PID namespace with.
+    """Defence in depth for the main process; not the boundary.
 
-    kpanel runs as uid 1000 in mc's PID namespace (for the CPU and memory
-    graphs), and so does the server, plugins included. Same uid means a plugin
-    could read /proc/<kpanel>/environ, so the login hash and the GitHub token,
-    and browse /proc/<kpanel>/root. A non-dumpable process's /proc entries
-    belong to root instead, which closes all of that. Linux only; elsewhere
-    (tests on a laptop) there is nothing to do. Returns whether it took.
+    kpanel shares mc's PID namespace (for the CPU and memory graphs). The
+    boundary is the uid: the panel runs as 1001, the server and its plugins as
+    1000, and the kernel lets no process read another uid's /proc/<pid>/environ,
+    mem or root. That covers every process in this container, the healthcheck
+    and `docker compose exec` included. Non-dumpable additionally makes this
+    one's /proc entries root's. Linux only; returns whether it took.
     """
     try:
         if libc is None:
@@ -1242,6 +1255,20 @@ def make_undumpable(libc=None):
         return libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
     except (OSError, AttributeError):
         return False
+
+
+def shares_server_uid(props=None, uid=None):
+    """True if the panel runs as the uid that owns the server's files.
+
+    Then a plugin could read this container's processes (environment: the login
+    hash, the GitHub token). The image runs as 1001, so this means someone set
+    `user:` to the server's uid.
+    """
+    try:
+        owner = os.stat(props or CFG["props"]).st_uid
+    except OSError:
+        return False
+    return owner == (os.getuid() if uid is None else uid)
 
 
 def _safe(fn):
@@ -1254,8 +1281,11 @@ def _safe(fn):
 
 if __name__ == "__main__":
     if not make_undumpable() and os.path.exists("/proc/self"):
-        print("WARNING: could not make the panel non-dumpable; the server could read its environment",
-              flush=True)
+        print("WARNING: could not make the panel non-dumpable", flush=True)
+    if shares_server_uid():
+        print(f"WARNING: the panel runs as uid {os.getuid()}, the owner of {CFG['props']}: code in the "
+              "server could read the panel's environment. Run it as another uid in the server's "
+              "group (the image's default is 1001:1000).", flush=True)
     try:
         login().validate()
     except auth.LoginError as ex:

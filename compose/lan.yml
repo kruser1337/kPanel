@@ -5,7 +5,7 @@
 # Publishes the panel on every interface of this host, so it needs a login,
 # and refuses to start until it has one (in .env, next to docker-compose.yml):
 #
-#   KPANEL_PASSWORD_HASH='$argon2id$...'   from: docker compose exec kpanel python hashpw.py
+#   KPANEL_PASSWORD_HASH='$argon2id$...'   from: docker compose run --rm --build hashpw
 #
 # Then open http://<this-host>:8080. The file manager comes along at /files/,
 # behind the same login. This is plain HTTP: fine on a home network, not

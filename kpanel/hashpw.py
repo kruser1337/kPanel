@@ -1,11 +1,16 @@
 """Make the panel's login: prints the line to put in .env.
 
-    docker compose exec kpanel python hashpw.py
+    docker compose run --rm --build hashpw
+
+The compose file's hashpw service runs this in a container of its own: no
+network, no environment, and not in the server's process namespace, so
+nothing in the server can watch the password being typed. Any machine with
+Docker and this repository works; the hash isn't tied to the host.
 
 Asks for the password twice (or reads one line from stdin when piped, e.g.
-`printf %s "$PW" | docker compose exec -T kpanel python hashpw.py`). Prints
-it single-quoted, which .env needs: compose would read each $ of the hash as
-a variable otherwise.
+`printf %s "$PW" | docker compose run --rm -T hashpw`). Prints it
+single-quoted, which .env needs: compose would read each $ of the hash as a
+variable otherwise.
 """
 
 import getpass
