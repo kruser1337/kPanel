@@ -4,3 +4,5 @@
 scratch/
 __pycache__/
 kpanel/.venv/
+# Security audit scratch: tool output and PoCs, never published.
+audit/
