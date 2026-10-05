@@ -29,11 +29,24 @@ class FakeFileBrowser(BaseHTTPRequestHandler):
             FakeFileBrowser.release.wait(5)
             self.wfile.write(b"data: second\n\n")
             return
+        if self.path.startswith("/files/api/raw"):  # a stored file, served inline as Quantum does
+            page = b"<form action=/players method=post><button>win</button></form>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Disposition", "inline")
+            self.send_header("Content-Security-Policy", "script-src 'none'")
+            self.send_header("X-Frame-Options", "ALLOWALL")  # upstream's say must not count
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+            return
         out = json.dumps({"method": self.command, "path": self.path, "headers": dict(self.headers),
                           "sha": hashlib.sha256(body).hexdigest(), "len": len(body)}).encode()
         self.send_response(201 if self.command == "POST" else 200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Set-Cookie", "fb=1; Path=/files/; HttpOnly")
+        self.send_header("Content-Security-Policy", "script-src 'self'")  # FileBrowser's own
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         if self.command != "HEAD":
@@ -86,6 +99,39 @@ class FilesProxy(unittest.TestCase):
         self.assertEqual(seen["headers"]["Host"], f"localhost:{self.port}")
         self.assertEqual(seen["headers"]["X-Forwarded-For"], "127.0.0.1")
         self.assertEqual(r.getheader("Set-Cookie"), "fb=1; Path=/files/; HttpOnly")
+
+    def assert_unframeable(self, r):
+        self.assertEqual(r.headers.get_all("X-Frame-Options"), ["DENY"])
+        self.assertEqual(r.headers.get_all("X-Content-Type-Options"), ["nosniff"])
+        self.assertIn("frame-ancestors 'none'", r.headers.get_all("Content-Security-Policy"))
+
+    def test_the_file_manager_cannot_be_framed_by_any_site(self):
+        """N-02: a page anywhere could iframe http://localhost:8080/files/ and
+        clickjack a file manager that has no login of its own."""
+        for path in ("/files/", "/files/api/resources?path=/", "/files/api/raw?files=/x.html"):
+            r, _ = self.req("GET", path, {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site"})
+            self.assertEqual(r.status, 200, path)
+            self.assert_unframeable(r)
+        r, _ = self.req("GET", "/files")  # the proxy's own answers too
+        self.assert_unframeable(r)
+
+    def test_file_managers_own_csp_is_kept_alongside(self):
+        r, _ = self.req("GET", "/files/")
+        self.assertIn("script-src 'self'", r.headers.get_all("Content-Security-Policy"))
+        self.assertNotIn("sandbox", r.headers.get_all("Content-Security-Policy"))  # the UI needs its scripts
+
+    def test_stored_files_are_sandboxed(self):
+        """N-02: a page dropped into /data and opened via the file manager must
+        not act as the panel's origin (e.g. a one-click form to /players)."""
+        r, body = self.req("GET", "/files/api/raw?files=/plugins/readme.html&inline=true")
+        self.assertIn(b"<form", body)                   # still viewable...
+        self.assertEqual(r.headers["Content-Disposition"], "inline")
+        csp = r.headers.get_all("Content-Security-Policy")
+        self.assertIn("sandbox", csp)                   # ...but in an origin of its own
+        self.assertIn("script-src 'none'", csp)
+        self.assert_unframeable(r)
+        r, _ = self.req("GET", "/files/api/resources?path=/")
+        self.assertIn("sandbox", r.headers.get_all("Content-Security-Policy"))
 
     def test_the_panels_login_is_not_passed_on(self):
         app.CFG["password_hash"] = auth.hash_password("correct horse battery")
@@ -161,6 +207,7 @@ class FilesProxy(unittest.TestCase):
         r, data = self.req("GET", "/files/")
         self.assertEqual(r.status, 502)
         self.assertIn(b"not reachable", data)
+        self.assert_unframeable(r)
 
     def test_without_an_upstream_files_is_not_served(self):
         app.CFG["files_upstream"] = ""

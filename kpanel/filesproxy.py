@@ -21,6 +21,20 @@ CHUNK = 64 * 1024
 # the panel's own login and stays here; FileBrowser has no use for it.
 _HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection",
         "te", "trailer", "transfer-encoding", "upgrade", "authorization"}
+# The file manager is on the panel's origin, so its responses get the panel's
+# framing and sniffing rules whatever FileBrowser sends (N-02): no site may frame
+# it (clickjacking a panel without a login), and nothing is content-sniffed.
+# FileBrowser's own Content-Security-Policy is kept; this is a second one, and
+# browsers enforce both.
+_REPLACED = {"x-frame-options", "x-content-type-options"}
+ALWAYS = [("X-Frame-Options", "DENY"), ("X-Content-Type-Options", "nosniff"),
+          ("Content-Security-Policy", "frame-ancestors 'none'")]
+# Under /api/ FileBrowser serves the files in /data themselves, inline: any page
+# a plugin or a user drops there would run as the panel's origin. sandbox gives
+# such a page an origin of its own and no scripts, forms or popups; images and
+# text still show in the browser, which Content-Disposition: attachment would
+# turn into downloads. The UI never opens /api/ as a page, so nothing breaks.
+SANDBOXED = (PREFIX + "api/", PREFIX + "public/")
 CONNECT_TIMEOUT = 10
 # Long, not infinite: the event stream idles between updates, but a hung
 # FileBrowser must not hold a panel thread forever.
@@ -29,6 +43,12 @@ READ_TIMEOUT = 600
 
 def handles(path: str) -> bool:
     return path == PREFIX.rstrip("/") or path.startswith(PREFIX)
+
+
+def safety_headers(path: str):
+    """The headers every /files/ response carries, FileBrowser's or our own."""
+    sandbox = urlsplit(path).path.startswith(SANDBOXED)
+    return ALWAYS + ([("Content-Security-Policy", "sandbox")] if sandbox else [])
 
 
 def forward(handler, upstream: str):
@@ -78,8 +98,10 @@ def forward(handler, upstream: str):
     try:
         handler.send_response(resp.status, resp.reason)
         for k, v in resp.getheaders():
-            if k.lower() not in _HOP:
+            if k.lower() not in _HOP and k.lower() not in _REPLACED:
                 handler.send_header(k, v)
+        for k, v in safety_headers(handler.path):
+            handler.send_header(k, v)
         # HTTP/1.0 to the browser: without a length, the body ends when the
         # connection closes, which is how an event stream is relayed as it comes.
         handler.send_header("Connection", "close")
@@ -98,7 +120,7 @@ def forward(handler, upstream: str):
 def _plain(handler, code, text, headers=None):
     b = text.encode()
     handler.send_response(code)
-    for k, v in (headers or {}).items():
+    for k, v in [*(headers or {}).items(), *safety_headers(handler.path)]:
         handler.send_header(k, v)
     handler.send_header("Content-Type", "text/plain; charset=utf-8")
     handler.send_header("Content-Length", str(len(b)))
