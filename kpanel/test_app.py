@@ -232,6 +232,8 @@ class App(unittest.TestCase):
         self.assertNotIn("debug", expected)
 
     def test_save_opens_pr_with_only_the_changed_keys(self):
+        app.CFG["trust_ts_headers"] = True  # behind tailscale serve
+        self.addCleanup(app.CFG.update, trust_ts_headers=False)
         status, body = self.post("/save", {
             "p:difficulty": OTHER_DIFFICULTY,  # changed
             "p:max-players": "8",            # unchanged: must not appear
@@ -568,6 +570,15 @@ class App(unittest.TestCase):
         self.assertEqual(app._int("<script>"), 0)
         self.assertEqual(app._int(None), 0)
         self.assertEqual(app._int("7"), 7)
+
+    def test_the_tailscale_login_header_is_ignored_unless_trusted(self):
+        """Outside tailscale.yml any client can send it: it must not name anyone."""
+        self.assertEqual(app.who_from({"Tailscale-User-Login": "admin@example.com"}), "")
+        app.CFG["trust_ts_headers"] = True
+        self.addCleanup(app.CFG.update, trust_ts_headers=False)
+        self.assertEqual(app.who_from({"Tailscale-User-Login": "me@example.com"}), "me@example.com")
+        for crafted in ("x\n| injected | row |", "a b", "[click](http://evil)", "x" * 101):
+            self.assertEqual(app.who_from({"Tailscale-User-Login": crafted}), "", crafted)
 
     def test_basic_auth_challenges_when_credentials_are_missing(self):
         app.CFG["basic_auth"] = "admin:hunter2"

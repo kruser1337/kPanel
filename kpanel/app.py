@@ -82,6 +82,9 @@ CFG = {
     # Host names the panel answers to besides localhost, comma-separated; "*" is
     # any. See host_allowed(): without a login, this is what stops DNS rebinding.
     "allowed_hosts": os.environ.get("KPANEL_ALLOWED_HOSTS", ""),
+    # 1 only behind `tailscale serve` (compose/tailscale.yml): it sets
+    # Tailscale-User-Login. Anywhere else that header is whatever the client says.
+    "trust_ts_headers": os.environ.get("KPANEL_TRUST_TS_HEADERS", "") == "1",
 }
 SPARK_POINTS = 5  # per graph: the last 4 samples plus the live value
 UNSET_DEFAULTS = {"blank", "[random text]", ""}
@@ -122,6 +125,17 @@ def rcon_password():
 
 def client():
     return Rcon(CFG["rcon_host"], CFG["rcon_port"], rcon_password())
+
+
+_LOGIN_NAME = re.compile(r"[A-Za-z0-9._%+@-]{1,100}")
+
+
+def who_from(headers):
+    """Who made a change, for the action log and PR bodies: the tailnet login, or ""."""
+    if not CFG["trust_ts_headers"]:
+        return ""
+    v = headers.get("Tailscale-User-Login", "")
+    return v if _LOGIN_NAME.fullmatch(v) else ""
 
 
 def record(who, what, reply):
@@ -247,7 +261,7 @@ def make_pr(gh, commit, text, blob, rows, wanted: dict, who: str, why: str) -> s
         was = r["git"] if r["git"] is not None else f"(not in git; live: {r['live']})"
         lines.append(f"| `{k}` | `{was}` | `{v}` | {'`' + p.env + '`' if p.env else '`CUSTOM_SERVER_PROPERTIES`'} |")
     body = "\n".join([
-        f"Opened from kPanel{f' by {who}' if who else ''}: {why}.", "",
+        f"Opened from kPanel{f' by `{who}`' if who else ''}: {why}.", "",
         *lines, "",
         "**Merging redeploys and restarts the server.** Merge when nobody is online.",
     ])
@@ -1117,7 +1131,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(413, "form too large", "text/plain")
         form = {k: v[0] for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace"),
                                               keep_blank_values=True).items()}
-        who = self.headers.get("Tailscale-User-Login", "")
+        who = who_from(self.headers)
         if self.path == "/players":
             try:
                 reply = do_player(form, who)
