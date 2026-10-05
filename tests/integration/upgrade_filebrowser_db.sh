@@ -67,8 +67,9 @@ logs=$("${NEW[@]}" logs filebrowser 2>&1)
 after=$(db "grep -l -a -r -F '$MARK' /d || true" | wc -l | tr -d ' ')
 fresh=$(db "grep -a -c -e '\"noauth\":true' /d/database.db" || true)
 ino1=$(db 'stat -c %i /d/database.db')
-# The slim image has no HTTP client: ask from a throwaway container on the stack's network.
-answers=$("$DOCKER" run --rm --network "${P}_default" alpine:3 wget -q -O /dev/null http://filebrowser:80/files/ 2>&1 && echo yes || echo no)
+# The slim image has no HTTP client: ask from a throwaway container on the file
+# manager's network (since N-05 it shares one only with the panel).
+answers=$("$DOCKER" run --rm --network "${P}_files" alpine:3 wget -q -O /dev/null http://filebrowser:80/files/ 2>&1 && echo yes || echo no)
 
 echo "== second start: a clean database is kept"
 "${NEW[@]}" restart filebrowser >/dev/null 2>&1

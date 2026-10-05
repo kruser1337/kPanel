@@ -136,7 +136,7 @@ echo
 echo "-- kpanel processes seen (pid uid cmdline) and what each read returned:"
 for log in "$work/a.log" "$work/b.log"; do
   for pid in $(kpanel_pids "$log"); do
-    grep -E "^SEEN $pid " "$log" | head -n1 | cut -c6-
+    { grep -E "^SEEN $pid " "$log" || true; } | sed -n '1s/^SEEN //p' 
     grep -E "^(ENV|MEM|ROOT) $pid " "$log" | sort -u | sed 's/^/      /'
   done
 done
