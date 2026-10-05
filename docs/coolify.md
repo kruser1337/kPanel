@@ -25,8 +25,10 @@ host, 8080 is often taken already).
      file Coolify deploys,
      `KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME}.${TS_TAILNET}"` (without a
      login the panel answers only to the names listed here; anything else gets
-     a page saying which name to add), and `KPANEL_TRUST_TS_HEADERS: "1"` (the
-     action log then names who made each change);
+     a page saying which name to add), `KPANEL_TRUST_TS_HEADERS: "1"` (the
+     action log then names who made each change), and
+     `KPANEL_ONLY_PEERS: "tailscale"` (the sidecar is then the only container
+     the panel answers);
    - copy the `tailscale:` service from
      [`compose/tailscale.yml`](../compose/tailscale.yml) into `services:`, and
      `tailscale-state:` into `volumes:`.

@@ -89,6 +89,11 @@ CFG = {
     # 1 only behind `tailscale serve` (compose/tailscale.yml): it sets
     # Tailscale-User-Login. Anywhere else that header is whatever the client says.
     "trust_ts_headers": os.environ.get("KPANEL_TRUST_TS_HEADERS", "") == "1",
+    # Other containers of this stack reach the panel straight over the compose
+    # network, past the published port. See peer_allowed(): service names whose
+    # requests are refused, and (tailscale.yml) the only ones answered.
+    "refuse_peers": os.environ.get("KPANEL_REFUSE_PEERS", ""),
+    "only_peers": os.environ.get("KPANEL_ONLY_PEERS", ""),
 }
 SPARK_POINTS = 5  # per graph: the last 4 samples plus the live value
 UNSET_DEFAULTS = {"blank", "[random text]", ""}
@@ -539,6 +544,54 @@ def require_auth_boundary(basic_auth, allow_no_auth):
         "  to require a login, or\n"
         "  set KPANEL_ALLOW_NO_AUTH=1 if the panel is only reachable over a\n"
         "  tailnet or VPN and that network is the boundary.")
+
+
+PEER_TTL = 10  # seconds a resolved service address is trusted; containers get new IPs on restart
+_peer_cache = {}  # names -> (expiry, frozenset of addresses)
+_peer_lock = threading.Lock()
+
+
+def resolve_peers(names: str) -> frozenset:
+    """The addresses compose's DNS gives these service names now; unknown names add none."""
+    now = time.monotonic()
+    with _peer_lock:
+        hit = _peer_cache.get(names)
+    if hit and hit[0] > now:
+        return hit[1]
+    found = set()
+    for name in (n.strip() for n in names.split(",")):
+        if not name:
+            continue
+        try:
+            found |= {ai[4][0] for ai in socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)}
+        except OSError:
+            pass  # not running right now (or no such service): nothing to match
+    with _peer_lock:
+        _peer_cache[names] = (now + PEER_TTL, frozenset(found))
+    return frozenset(found)
+
+
+def peer_allowed(addr, refuse=None, only=None, resolve=resolve_peers):
+    """May a request from this TCP peer be answered?
+
+    Every container in the stack can reach kpanel:8080 directly, with any Host
+    header it likes, so without a login the host check doesn't stop them: a
+    plugin in mc could op itself or open pull requests with the panel's token.
+    The published port's peer is the bridge gateway, the real client, or
+    something else again depending on the engine and its proxy settings, so it
+    can't be allowlisted in general. What can be named are the siblings:
+    KPANEL_REFUSE_PEERS (the base file: mc, mc-backup, filebrowser). Behind
+    tailscale.yml nothing is published and the sidecar is the only way in, so
+    KPANEL_ONLY_PEERS names just it. The panel's own container (loopback: the
+    healthcheck) is always answered.
+    """
+    refuse = CFG["refuse_peers"] if refuse is None else refuse
+    only = CFG["only_peers"] if only is None else only
+    if addr in ("127.0.0.1", "::1"):
+        return True
+    if only:
+        return addr in resolve(only)
+    return not (refuse and addr in resolve(refuse))
 
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -1069,8 +1122,14 @@ class Handler(BaseHTTPRequestHandler):
     def _gate(self):
         """True if the request may go on; otherwise the refusal has been sent.
 
-        Host first (DNS rebinding), then the login, if there is one.
+        The peer first (other containers of the stack), then the Host (DNS
+        rebinding), then the login, if there is one.
         """
+        if not peer_allowed(self.client_address[0]):
+            print(f"refused request from {self.client_address[0]}: another container of this stack "
+                  "(KPANEL_REFUSE_PEERS / KPANEL_ONLY_PEERS)", flush=True)
+            self._send(403, "kPanel does not answer other containers of its stack.\n", "text/plain; charset=utf-8")
+            return False
         if not host_allowed(self.headers.get("Host")):
             self._misdirected()
             return False

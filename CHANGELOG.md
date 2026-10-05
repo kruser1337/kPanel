@@ -41,6 +41,12 @@ git pull && docker compose up -d --build
   its own user (uid 1001, in the server's group), and the kernel doesn't let
   the server's processes read another user's environment or memory. `hashpw` runs in a
   container of its own, outside the server's process namespace.
+- **Other containers of the stack could use the panel and the file manager
+  directly (Low).** Over the compose network, past the published port, code
+  in the server could op players or open pull requests with the panel's
+  token in the setups without a login. The panel now refuses requests from
+  the stack's other services (behind Tailscale it answers only the sidecar),
+  and the file manager is on a network only the panel shares.
 - **The old file-manager password stayed on disk in plain text (Low).** With
   `compose/lan.yml`, 0.2 stored it in the file manager's database. That
   database is deleted on the first start of 0.3 (see Upgrading).
@@ -71,10 +77,8 @@ git pull && docker compose up -d --build
   reverse proxy all clients share one address, and the global limit acts on
   everyone anyway, so while someone keeps guessing, a browser that isn't
   already logged in gets HTTP 429. That is the price of the limit.
-- **Other containers in the stack reach the panel directly.** In the setups
-  without a login (base file, Tailscale), a process in the server container
-  can use the panel without going through the host check. It already has the
-  server's files and RCON, so this adds little.
+- **A container you add to the stack yourself can reach the panel** over the
+  compose network: only the stack's own services are refused (see Fixed).
 - **`KPANEL_BASIC_AUTH`, the plain-text login, is removed in 0.4**, not here,
   so that upgrading never locks anyone out.
 - **No-login mode on Docker Engine older than 28** is not tested: those
@@ -133,9 +137,11 @@ because of kPanel itself.
   working with the new panel image, except that dashboard history is no
   longer saved across restarts (the log says so once). To get the fixes:
   - Copy the `filebrowser` and `hashpw` services, the kpanel volume line
-    `kpanel-state:/var/lib/kpanel` (and `kpanel-state:` under `volumes:`), and
-    the `FILES_UPSTREAM`, `KPANEL_ALLOWED_HOSTS` and `KPANEL_TRUST_TS_HEADERS`
-    lines from the new files (see [`docs/coolify.md`](docs/coolify.md)).
+    `kpanel-state:/var/lib/kpanel` (and `kpanel-state:` under `volumes:`), the
+    `networks:` lines and the top-level `networks:` block, and the
+    `FILES_UPSTREAM`, `KPANEL_ALLOWED_HOSTS`, `KPANEL_TRUST_TS_HEADERS`,
+    `KPANEL_REFUSE_PEERS` and (Tailscale) `KPANEL_ONLY_PEERS` lines from the
+    new files (see [`docs/coolify.md`](docs/coolify.md)).
   - Settings writes `server.properties` through the server's group, so the
     file must stay group-writable, as the server creates it. If Settings says
     otherwise, run the `chmod` it names.

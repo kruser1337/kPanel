@@ -161,6 +161,9 @@ services:
       - mc-data:/data
       - mc-backups:/backups:ro
       - filebrowser-db:/home/filebrowser/data
+    # Only the panel can reach it: on the default network, code in the server
+    # could use this login-less file manager directly.
+    networks: [files]
 
   # The panel: dashboard, settings, players, gamerules, logs.
   kpanel:
@@ -212,6 +215,10 @@ services:
       COMPOSE_PATH: "docker-compose.yml"
       # The file manager, served by the panel at /files/ (the Files link).
       FILES_UPSTREAM: "http://filebrowser:80"
+      # The other containers here reach the panel straight over the compose
+      # network, with any Host header; without a login, code in the server
+      # could drive the panel that way. Their requests are refused.
+      KPANEL_REFUSE_PEERS: "mc,mc-backup,filebrowser"
       RCON_HOST: "mc"
       RCON_PORT: "25575"
       # What players type to connect; the dashboard shows and pings it.
@@ -228,6 +235,8 @@ services:
       # The panel's only state: dashboard history. (kpanel-data up to 0.2,
       # owned by the old uid 1000; a fresh volume gets the image's ownership.)
       - kpanel-state:/var/lib/kpanel
+    # default: the server (RCON) and the published port; files: the file manager.
+    networks: [default, files]
 
   # Makes the panel's login hash. Not started by `up`; run it when you need it:
   #
@@ -246,6 +255,11 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+
+networks:
+  # The panel and the file manager, nothing else, and no way out.
+  files:
+    internal: true
 
 volumes:
   mc-data:

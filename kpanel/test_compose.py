@@ -158,6 +158,22 @@ class Base(unittest.TestCase):
         self.assertIn("kpanel-state:/var/lib/kpanel", BASE["services"]["kpanel"]["volumes"])
 
 
+    def test_only_the_panel_can_reach_the_file_manager(self):
+        """N-05: on the default network, code in mc reached the login-less
+        FileBrowser directly (http://filebrowser:80/files/ -> 200)."""
+        self.assertTrue(BASE["networks"]["files"]["internal"])
+        on_files = {n for n, svc in BASE["services"].items() if "files" in svc.get("networks", [])}
+        self.assertEqual(on_files, {"filebrowser", "kpanel"})
+        self.assertEqual(BASE["services"]["filebrowser"]["networks"], ["files"])
+        self.assertIn("default", BASE["services"]["kpanel"]["networks"])  # RCON, published port
+
+    def test_the_panel_refuses_every_sibling_service(self):
+        """N-05: each other long-running service of the stack is named."""
+        refused = set(BASE["services"]["kpanel"]["environment"]["KPANEL_REFUSE_PEERS"].split(","))
+        siblings = {n for n, svc in BASE["services"].items() if n != "kpanel" and not svc.get("profiles")}
+        self.assertEqual(refused, siblings)
+
+
 class Image(unittest.TestCase):
     def test_the_image_copies_every_module_the_panel_imports(self):
         """The Dockerfile lists its files; a module missing there passes every
@@ -250,6 +266,11 @@ class TailscaleOverlay(unittest.TestCase):
         """An empty TS_HOSTNAME builds a serve config for ".", silently serving nothing."""
         for var in ("TS_AUTHKEY", "TS_HOSTNAME", "TS_TAILNET"):
             self.assertIn("${" + var + ":?", TAILSCALE_TEXT)
+
+    def test_only_the_sidecar_is_answered(self):
+        env = TAILSCALE["services"]["kpanel"]["environment"]
+        self.assertEqual(env["KPANEL_ONLY_PEERS"], "tailscale")
+        self.assertIn("tailscale", TAILSCALE["services"])
 
     def test_the_sidecar_has_no_container_hostname(self):
         """It would collide with a service name in the compose network's DNS."""

@@ -609,6 +609,49 @@ class App(unittest.TestCase):
         self.assertEqual(app._int(None), 0)
         self.assertEqual(app._int("7"), 7)
 
+    def test_other_containers_of_the_stack_are_refused(self):
+        """N-05: from mc, http://kpanel:8080 with Host: localhost was the full
+        panel without a login. Sibling services are refused by address."""
+        stack = {"mc,mc-backup,filebrowser": frozenset({"10.89.0.2", "10.89.0.3"})}
+        resolve = lambda names: stack.get(names, frozenset())
+        refuse = "mc,mc-backup,filebrowser"
+        self.assertFalse(app.peer_allowed("10.89.0.2", refuse, "", resolve))      # mc
+        self.assertTrue(app.peer_allowed("10.89.0.1", refuse, "", resolve))       # the published port's gateway
+        self.assertTrue(app.peer_allowed("192.168.1.20", refuse, "", resolve))    # a LAN client, no userland proxy
+        self.assertTrue(app.peer_allowed("127.0.0.1", refuse, "", resolve))       # the healthcheck
+        self.assertTrue(app.peer_allowed("10.89.0.2", "", "", resolve))           # nothing configured
+
+    def test_behind_tailscale_only_the_sidecar_is_answered(self):
+        resolve = lambda names: frozenset({"10.89.0.9"}) if names == "tailscale" else frozenset()
+        self.assertTrue(app.peer_allowed("10.89.0.9", "mc", "tailscale", resolve))
+        self.assertFalse(app.peer_allowed("10.89.0.2", "mc", "tailscale", resolve))
+        self.assertFalse(app.peer_allowed("10.89.0.1", "mc", "tailscale", resolve))  # not published there
+        self.assertTrue(app.peer_allowed("127.0.0.1", "mc", "tailscale", resolve))
+        # the sidecar not resolvable (restarting): nobody, rather than everybody
+        self.assertFalse(app.peer_allowed("10.89.0.9", "", "tailscale", lambda n: frozenset()))
+
+    def test_a_refused_peer_gets_a_403_before_anything_else(self):
+        asked = []
+
+        def refuse(addr):
+            asked.append(addr)
+            return False
+        from unittest import mock
+        with mock.patch.object(app, "peer_allowed", refuse):
+            status, body = self.get_raw("/", {"Host": "evil.example"})  # peer before Host
+            self.assertEqual(status, 403)
+            self.assertIn("other containers", body)
+            status, _ = self.post("/players", {"action": "op", "name": "Attacker2"},
+                                  {"Sec-Fetch-Site": "same-origin"})
+            self.assertEqual(status, 403)
+        self.assertEqual(asked[0], "127.0.0.1")  # it is the TCP peer that is judged
+
+    def test_service_names_resolve_and_unknown_names_add_nothing(self):
+        app._peer_cache.clear()
+        self.addCleanup(app._peer_cache.clear)
+        self.assertIn("127.0.0.1", app.resolve_peers("localhost, no-such-service.invalid"))
+        self.assertEqual(app.resolve_peers("no-such-service.invalid"), frozenset())
+
     def test_the_tailscale_login_header_is_ignored_unless_trusted(self):
         """Outside tailscale.yml any client can send it: it must not name anyone."""
         self.assertEqual(app.who_from({"Tailscale-User-Login": "admin@example.com"}), "")

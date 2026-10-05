@@ -21,6 +21,9 @@ services:
       # tailscale serve tells the panel who is logged in to the tailnet, for the
       # action log; only trusted here, where nothing else can reach the panel.
       KPANEL_TRUST_TS_HEADERS: "1"
+      # The sidecar is the only way in; requests from any other container of
+      # the stack are refused.
+      KPANEL_ONLY_PEERS: "tailscale"
       # The name the tailnet reaches it by (tailscale serve passes the browser's
       # Host on); without a login, every other name is refused.
       KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME:?set TS_HOSTNAME in .env}.${TS_TAILNET:?set TS_TAILNET in .env}"
