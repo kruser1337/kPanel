@@ -24,6 +24,7 @@ to start unless told which (require_auth_boundary).
 import base64
 import collections
 import glob
+import hashlib
 import hmac
 import html
 import json
@@ -277,6 +278,13 @@ def _read_varint(s):
 _DATA_PNG = re.compile(r"data:image/png;base64,[A-Za-z0-9+/]+={0,2}")
 
 
+def _int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def status_ping(host, port, timeout=4.0):
     """Minecraft Server List Ping: exactly what a client's server list shows."""
     t0 = time.monotonic()
@@ -296,8 +304,9 @@ def status_ping(host, port, timeout=4.0):
     r = json.loads(data)
     d = r.get("description", "")
     motd = d if isinstance(d, str) else d.get("text", "") + "".join(x.get("text", "") for x in d.get("extra", []))
-    return {"version": r.get("version", {}).get("name", "?"), "online": r.get("players", {}).get("online", 0),
-            "max": r.get("players", {}).get("max", 0), "motd": rcon._COLOR.sub("", motd), "ms": ms,
+    # int(): the counts go into the page unescaped, and a server is free to send anything.
+    return {"version": r.get("version", {}).get("name", "?"), "online": _int(r.get("players", {}).get("online")),
+            "max": _int(r.get("players", {}).get("max")), "motd": rcon._COLOR.sub("", motd), "ms": ms,
             # data:image/png;base64,... when the server has a server-icon.png
             # Checked against the base64 alphabet, not just the prefix: the icon goes
             # into a src="..." attribute, and a quote in it would close the attribute
@@ -438,6 +447,12 @@ if(document.body.dataset.refresh)setTimeout(()=>location.reload(),+document.body
 if(!/^(localhost|127\\.0\\.0\\.1|\\[::1\\])$/.test(location.hostname))document.querySelectorAll('a[href^="http://localhost:"]')
  .forEach(a=>{const u=new URL(a.href);u.hostname=location.hostname;a.href=u});
 """
+
+# Defence in depth behind the escaping: even injected markup could run no script
+# but the panel's own (pinned by hash), load nothing, and post nowhere else.
+CSP = ("default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+       f"script-src 'sha256-{base64.b64encode(hashlib.sha256(JS.encode()).digest()).decode()}'; "
+       "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 
 def settings_mode():
     """"git" when the panel can open PRs, otherwise "file".
@@ -951,8 +966,14 @@ def logs_page(lines, hide_rcon):
 
 # --- HTTP ---------------------------------------------------------------------
 
+MAX_FORM = 200_000  # bytes; the Settings form is about 10 KB
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "kPanel"
+    # Seconds a client may stall mid-request before its connection is dropped,
+    # so slow or never-finished requests can't pin worker threads.
+    timeout = 30
 
     def _send(self, code, body, ctype="text/html; charset=utf-8", cache=False):
         b = body if isinstance(body, bytes) else body.encode()
@@ -962,6 +983,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "public, max-age=86400" if cache else "no-store")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", CSP)
         self.end_headers()
         self.wfile.write(b)
 
@@ -1052,8 +1075,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, "not found", "text/plain")
         if self.path == "/import" and settings_mode() != "git":
             return self._send(404, "not found", "text/plain")
-        n = int(self.headers.get("Content-Length") or 0)
-        form = {k: v[0] for k, v in parse_qs(self.rfile.read(min(n, 200_000)).decode(),
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0:  # rfile.read(-1) would wait for the client to hang up
+            return self._send(400, "bad Content-Length", "text/plain")
+        if n > MAX_FORM:
+            return self._send(413, "form too large", "text/plain")
+        form = {k: v[0] for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace"),
                                               keep_blank_values=True).items()}
         who = self.headers.get("Tailscale-User-Login", "")
         if self.path == "/players":

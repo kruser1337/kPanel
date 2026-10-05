@@ -528,6 +528,47 @@ class App(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(FakeMinecraft.sent, [])
 
+    # --- request limits and headers -------------------------------------------------
+
+    def test_pages_carry_a_csp_that_allows_exactly_the_panels_own_script(self):
+        with urllib.request.urlopen(self.url + "/players") as r:
+            csp, nosniff, body = r.headers["Content-Security-Policy"], r.headers["X-Content-Type-Options"], r.read().decode()
+        self.assertEqual(nosniff, "nosniff")
+        scripts = re.findall(r"<script>(.*?)</script>", body, re.S)
+        self.assertEqual(len(scripts), 1)  # one inline script, the one the hash pins
+        digest = base64.b64encode(__import__("hashlib").sha256(scripts[0].encode()).digest()).decode()
+        self.assertIn(f"script-src 'sha256-{digest}'", csp)
+        self.assertIn("default-src 'none'", csp)
+        self.assertIn("form-action 'self'", csp)
+
+    def test_a_negative_content_length_is_refused_at_once(self):
+        """rfile.read(-1) used to block the worker thread until the client hung up."""
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=3)
+        c.putrequest("POST", "/players")
+        c.putheader("Sec-Fetch-Site", "same-origin")
+        c.putheader("Content-Length", "-1")
+        c.endheaders()
+        self.assertEqual(c.getresponse().status, 400)
+        c.close()
+
+    def test_an_oversized_form_is_refused_unread(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=3)
+        c.putrequest("POST", "/players")
+        c.putheader("Sec-Fetch-Site", "same-origin")
+        c.putheader("Content-Length", str(app.MAX_FORM + 1))
+        c.endheaders()
+        self.assertEqual(c.getresponse().status, 413)
+        c.close()
+        self.assertEqual(FakeMinecraft.sent, [])
+
+    def test_a_stalled_client_is_dropped(self):
+        self.assertTrue(0 < app.Handler.timeout <= 60)
+
+    def test_player_counts_from_the_ping_are_numbers(self):
+        self.assertEqual(app._int("<script>"), 0)
+        self.assertEqual(app._int(None), 0)
+        self.assertEqual(app._int("7"), 7)
+
     def test_basic_auth_challenges_when_credentials_are_missing(self):
         app.CFG["basic_auth"] = "admin:hunter2"
         try:
