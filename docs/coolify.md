@@ -69,6 +69,12 @@ carry its changes to `docker-compose.yml` over into `compose/coolify.yml` (image
 - **Restart vs. deploy.** Coolify's *Restart* restarts the containers; enough
   after file changes (Paper YAML, plugin configs). A changed environment variable
   needs a **Deploy**.
+- **The file manager isn't network-isolated here.** Coolify attaches every
+  service to a network of its own (named after the app), on top of the ones
+  in the file, so `mc` and `mc-backup` can reach `filebrowser` directly, past
+  the panel. Other Coolify apps can't: that network is per app. The server
+  gains nothing much from it (it already writes `/data`; the file manager adds
+  read access to `/backups`), but the panel's checks don't apply on that path.
 - **"running:healthy" can mislead.** A service Coolify never created (a profiled
   one, say) can't be unhealthy. After a deploy, check the panel and the file
   manager actually answer.
