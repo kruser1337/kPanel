@@ -59,7 +59,7 @@ docker compose up -d
 That's all. No `.env`, no accounts:
 
 - **The panel** is at <http://localhost:8080>
-- **The file manager** is at <http://localhost:8081>
+- **The file manager** is at <http://localhost:8080/files/> (the panel's **Files** link)
 - **Players** connect to this machine on port **25565**
 
 The whitelist is on, so before anyone can join, add them (yourself first) on
@@ -76,7 +76,7 @@ tells you when a new release is out; see
 
 | You want | Add | Needs |
 |---|---|---|
-| The panel from other devices on your network | `-f compose/lan.yml` | `KPANEL_BASIC_AUTH` and `FILES_PASSWORD` in `.env` |
+| The panel from other devices on your network | `-f compose/lan.yml` | A panel login (`KPANEL_PASSWORD_HASH` in `.env`); see below |
 | The panel from anywhere, over HTTPS | `-f compose/tailscale.yml` | A Tailscale account; see [`docs/tailscale.md`](docs/tailscale.md) |
 | Settings changes as reviewed pull requests | nothing extra | A fork of this repo and a GitHub token; see [Settings](#settings) |
 | Deploys on every merge | Coolify | See [`docs/coolify.md`](docs/coolify.md) |
@@ -88,11 +88,27 @@ cp .env.example .env    # uncomment and fill in the lines you need
 docker compose -f docker-compose.yml -f compose/lan.yml up -d
 ```
 
+**The panel login is a hash, not a password.** Make it with
+
+```bash
+docker compose run --rm --build hashpw
+```
+
+This runs in a container of its own, with no network and outside the
+server's process namespace, so the stack needn't be running, and any machine
+with Docker and this repository will do.
+
+It asks for a password (12 characters or more) and prints a line like
+`KPANEL_PASSWORD_HASH='$argon2id$v=19$…'`. Paste it into `.env` **with its
+single quotes**: without them compose reads each `$` as a variable. Log in as
+`admin` (or set `KPANEL_USER`). Upgrading from 0.2 with `KPANEL_BASIC_AUTH`?
+It still works in 0.3, and every page tells you to make the swap.
+
 **Passwords are enforced, not suggested.** `compose/lan.yml` publishes the panel
-and the file manager to your network, so compose refuses to start until both
-passwords are set, and the panel itself refuses to run without a login. A panel
-exposed by accident looks exactly like one that is working, so it must not be
-possible to get one by forgetting a line.
+(and with it the file manager, at `/files/`) to your network, so the panel
+refuses to start without a login. A panel exposed by accident looks exactly
+like one that is working, so it must not be possible to get one by forgetting
+a line.
 
 ## Settings
 
@@ -135,13 +151,89 @@ To opt in, set `VERSION` and `PAPER_BUILD` to the beta and add
 |---|---|
 | `mc` | Paper server ([`itzg/minecraft-server`](https://github.com/itzg/docker-minecraft-server)) |
 | `mc-backup` | Scheduled world backups, pruned to a fixed count |
-| `kpanel` | The panel. Python standard library plus PyYAML; no database |
-| `filebrowser` | [FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) over the world files |
+| `kpanel` | The panel. Python standard library plus PyYAML and argon2-cffi; no database |
+| `filebrowser` | [FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) over the world files, served by the panel at `/files/` |
 | `tailscale` | *Only with `compose/tailscale.yml`:* puts the panel and file manager on your tailnet |
 
 The panel writes only `server.properties` and talks to the server over RCON. It
 deliberately has **no access to the Docker socket** — that would expose every
 other container's environment on the host.
+
+## Security
+
+**Threat model.** The panel can op and ban players, change every setting,
+restart the server, and (through the file manager) write any file the server
+runs, plugins included. So whoever reaches the panel controls the server. Each
+setup picks who that is:
+
+| Setup | Who can reach the panel | Login |
+|---|---|---|
+| Base file alone | This machine only (published on `127.0.0.1`) | None |
+| `compose/lan.yml` | Your local network | Required |
+| `compose/tailscale.yml` | Devices on your tailnet | None; the tailnet is the boundary |
+
+**Inside the stack.** The table is about who reaches the published port. The
+stack's own containers reach the panel over the compose network instead, so
+the panel refuses requests from them (`KPANEL_REFUSE_PEERS`: `mc`, `mc-backup`,
+`filebrowser`), and with `compose/tailscale.yml` it answers only the sidecar
+(`KPANEL_ONLY_PEERS`). The file manager is on a network only the panel shares.
+Two gaps remain. A container you add to the stack yourself is not on that
+list. And if the host itself is on your tailnet, code in the server can go out
+through the host and back in through the sidecar, like any tailnet device.
+
+Without a login, the panel answers only to `localhost` (and names in
+`KPANEL_ALLOWED_HOSTS`). That stops **DNS rebinding**, where a web page you
+open points its own domain at your machine to drive the panel from your
+browser. Cross-site form posts are refused too. No-login mode assumes a
+single-user machine and Docker Engine 28 or newer: from 28 on, Docker drops
+packets for a `127.0.0.1`-published port that arrive from the network; older
+versions have no such rule, and a host on the same network segment may get
+through ([moby#45610](https://github.com/moby/moby/issues/45610)).
+
+**Recommended deployment.** Keep the panel off the internet. Reach it on the
+machine itself, over Tailscale, or on your LAN with a login. Don't
+port-forward 8080, and don't put it behind a public reverse proxy unless that
+proxy adds TLS and its own authentication. `compose/lan.yml` is plain HTTP:
+fine at home, not on shared or public Wi-Fi.
+
+**Wrong passwords.** Five in a row from one address start a backoff that
+doubles up to five minutes, and past 30 failed logins a minute from all
+addresses together, everyone not already logged in waits a minute. A login
+that already worked keeps working for ten minutes regardless. Behind NAT or a
+reverse proxy (Coolify's included) every client has the same address, so the
+per-address limit is in effect global too: someone guessing can keep you
+waiting until they stop.
+
+**What is hashed, what is stored, and why.**
+
+| Secret | How it is kept | Why |
+|---|---|---|
+| Panel password | **argon2id hash** in `.env` (`KPANEL_PASSWORD_HASH`) | It only has to be checked, never read back, so a leaked `.env` or a pasted config gives away no password. `hashpw` makes it in a container of its own, out of the server's reach |
+| GitHub token | Plain text in `.env` | The panel has to send it to GitHub. Use a fine-grained token for your fork only |
+| RCON password | Random, regenerated by the server on every start, inside the server volume | The panel and backups need it in clear; it never leaves the stack's network |
+| Tailscale auth key | Plain text in `.env` | Used once, on first boot. Use a single-use key and delete it from `.env` afterwards |
+
+Encrypting the clear-text ones would not help: the key would have to sit on the
+same machine, readable by whoever can read `.env`. Instead:
+
+- **The server can't read the panel's secrets.** The panel shares the
+  server's process namespace (for the CPU and memory graphs) but runs as its
+  own user, uid 1001, so the kernel doesn't let code in the server, a plugin
+  say, read the environment or memory of any panel process: not the panel
+  itself, not its healthcheck, not a `docker compose exec`.
+  `tests/integration/plugin_isolation.sh` checks exactly that, from inside the
+  server container.
+- The panel runs with no Linux capabilities on a read-only filesystem, and
+  never logs a secret.
+
+**What the panel itself can reach.** The other direction is not sealed off:
+the panel is in the server's group, and the server creates its files
+group-writable, so the panel can write most of the server folder, `plugins/`
+included. Whoever takes over the panel can run code in the server. That is
+why the panel is kept on this machine, behind a login, or on your tailnet.
+
+**Reporting a vulnerability.** Please don't open a public issue. See
+[`SECURITY.md`](SECURITY.md).
 
 ## Status
 

@@ -19,11 +19,16 @@ host, 8080 is often taken already).
 1. **Fork this repository**, and work in your fork.
 2. **Make the file** Coolify will deploy: `cp docker-compose.yml compose/coolify.yml`,
    then in `compose/coolify.yml`:
-   - delete the `ports:` lists of `kpanel` and `filebrowser` (keep `mc`'s);
+   - delete the `ports:` list of `kpanel` (keep `mc`'s);
    - under `kpanel` → `environment`, set
      `COMPOSE_PATH: "compose/coolify.yml"`, so Settings' pull requests edit the
-     file Coolify deploys, and
-     `FILES_URL: "https://${TS_HOSTNAME}.${TS_TAILNET}:8443/"`;
+     file Coolify deploys,
+     `KPANEL_ALLOWED_HOSTS: "${TS_HOSTNAME}.${TS_TAILNET}"` (without a
+     login the panel answers only to the names listed here; anything else gets
+     a page saying which name to add), `KPANEL_TRUST_TS_HEADERS: "1"` (the
+     action log then names who made each change), and
+     `KPANEL_ONLY_PEERS: "tailscale"` (the sidecar is then the only container
+     the panel answers);
    - copy the `tailscale:` service from
      [`compose/tailscale.yml`](../compose/tailscale.yml) into `services:`, and
      `tailscale-state:` into `volumes:`.
@@ -49,7 +54,12 @@ carry its changes to `docker-compose.yml` over into `compose/coolify.yml` (image
 - **Never rename a volume key.** Coolify names volumes `<app-uuid>_<key>`
   (`…_mc-data` is your world). A renamed key is a new, empty volume: a new
   world. Changing the *compose location* of the same Application is safe,
-  because the UUID and keys stay the same.
+  because the UUID and keys stay the same. (kPanel 0.3 itself replaces
+  `kpanel-data` with `kpanel-state` on purpose: the panel's new user can't
+  write the old volume. It holds only the dashboard graphs, which start over.)
+- **The `hashpw` service** has a profile, so Coolify skips it, as it should:
+  it is a one-off tool. Make the login hash in a local checkout with
+  `docker compose run --rm --build hashpw`; the hash isn't tied to the host.
 - **A new `${VARIABLE}` arrives empty.** Coolify creates each variable when a
   deploy first parses the file, with no value, so the deploy that introduces it
   runs without it. Merge, set the value, then deploy again.

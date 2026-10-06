@@ -24,7 +24,7 @@ to start unless told which (require_auth_boundary).
 import base64
 import collections
 import glob
-import hmac
+import hashlib
 import html
 import json
 import os
@@ -35,11 +35,13 @@ import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import yaml
 
+import auth
 import compose_edit as ce
+import filesproxy
 import history
 import procstats
 import release
@@ -58,7 +60,10 @@ CFG = {
     "props": os.environ.get("PROPERTIES_PATH", "/data/server.properties"),
     "data": os.environ.get("DATA_DIR", "/data"),
     "backups": os.environ.get("BACKUPS_DIR", "/backups"),
-    "files_url": os.environ.get("FILES_URL", ""),
+    # The file manager, served by the panel under /files/ (see filesproxy).
+    "files_upstream": os.environ.get("FILES_UPSTREAM", ""),
+    # Where the Files link points: /files/ when the panel serves it.
+    "files_url": os.environ.get("FILES_URL", "") or ("/files/" if os.environ.get("FILES_UPSTREAM") else ""),
     "public_host": os.environ.get("PUBLIC_HOST", "localhost"),
     "public_port": int(os.environ.get("PUBLIC_PORT", "25565")),
     "game_host": os.environ.get("GAME_HOST", "mc"),
@@ -69,11 +74,26 @@ CFG = {
     "rcon_password": os.environ.get("RCON_PASSWORD", ""),
     "history": os.environ.get("HISTORY_PATH", "/var/lib/kpanel/history.json"),
     "sample_seconds": int(os.environ.get("SAMPLE_SECONDS", "300")),
-    # "user:password" turns on HTTP basic auth. Empty means the panel trusts
-    # whoever can reach it, which is only safe behind a tailnet or VPN.
+    # The login, HTTP basic auth: KPANEL_USER plus an argon2id hash made by
+    # hashpw.py. None of these set means the panel trusts whoever can reach it,
+    # which is only safe on loopback or behind a tailnet or VPN.
+    "user": os.environ.get("KPANEL_USER", "admin"),
+    "password_hash": os.environ.get("KPANEL_PASSWORD_HASH", ""),
+    # Deprecated: "user:password" in plain text. Works in 0.3 with a warning.
     "basic_auth": os.environ.get("KPANEL_BASIC_AUTH", ""),
     # Asks api.github.com twice a day whether a newer kPanel exists. 0 turns it off.
     "update_check": os.environ.get("KPANEL_UPDATE_CHECK", "1") != "0",
+    # Host names the panel answers to besides localhost, comma-separated; "*" is
+    # any. See host_allowed(): without a login, this is what stops DNS rebinding.
+    "allowed_hosts": os.environ.get("KPANEL_ALLOWED_HOSTS", ""),
+    # 1 only behind `tailscale serve` (compose/tailscale.yml): it sets
+    # Tailscale-User-Login. Anywhere else that header is whatever the client says.
+    "trust_ts_headers": os.environ.get("KPANEL_TRUST_TS_HEADERS", "") == "1",
+    # Other containers of this stack reach the panel straight over the compose
+    # network, past the published port. See peer_allowed(): service names whose
+    # requests are refused, and (tailscale.yml) the only ones answered.
+    "refuse_peers": os.environ.get("KPANEL_REFUSE_PEERS", ""),
+    "only_peers": os.environ.get("KPANEL_ONLY_PEERS", ""),
 }
 SPARK_POINTS = 5  # per graph: the last 4 samples plus the live value
 UNSET_DEFAULTS = {"blank", "[random text]", ""}
@@ -114,6 +134,17 @@ def rcon_password():
 
 def client():
     return Rcon(CFG["rcon_host"], CFG["rcon_port"], rcon_password())
+
+
+_LOGIN_NAME = re.compile(r"[A-Za-z0-9._%+@-]{1,100}")
+
+
+def who_from(headers):
+    """Who made a change, for the action log and PR bodies: the tailnet login, or ""."""
+    if not CFG["trust_ts_headers"]:
+        return ""
+    v = headers.get("Tailscale-User-Login", "")
+    return v if _LOGIN_NAME.fullmatch(v) else ""
 
 
 def record(who, what, reply):
@@ -191,16 +222,28 @@ def load_file():
 
 
 def save_file(wanted: dict, who: str):
-    """Write the validated values into server.properties, atomically."""
+    """Write the validated values into server.properties, in place.
+
+    The panel runs as its own uid in the server's group (so the server can't
+    read the panel's processes), and /data is not group-writable: there is no
+    temp file and rename, only the file's own group write bit. One write of a
+    ~2 KB file, then truncate and fsync. O_NOFOLLOW: the server owns /data, so a
+    symlink planted in place of the file must not redirect the write.
+    """
     path = CFG["props"]
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    new = st.write_properties(text, wanted)
-    tmp = f"{path}.kpanel-tmp"
-    with open(tmp, "w", encoding="ascii") as f:
+    new = st.write_properties(text, wanted).encode("ascii")
+    try:
+        fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+    except PermissionError:
+        raise OSError(f"The panel may not write {path}: it needs the file group-writable "
+                      f"(the server's default). Fix it with: docker compose exec mc chmod g+w {path}") from None
+    with os.fdopen(fd, "wb") as f:
         f.write(new)
-    os.chmod(tmp, os.stat(path).st_mode & 0o777)
-    os.replace(tmp, path)  # never a half-written file, even if the panel dies mid-save
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
     for k, v in sorted(wanted.items()):
         record(who, f"set {k}={v}", "saved to server.properties")
 
@@ -239,7 +282,7 @@ def make_pr(gh, commit, text, blob, rows, wanted: dict, who: str, why: str) -> s
         was = r["git"] if r["git"] is not None else f"(not in git; live: {r['live']})"
         lines.append(f"| `{k}` | `{was}` | `{v}` | {'`' + p.env + '`' if p.env else '`CUSTOM_SERVER_PROPERTIES`'} |")
     body = "\n".join([
-        f"Opened from kPanel{f' by {who}' if who else ''}: {why}.", "",
+        f"Opened from kPanel{f' by `{who}`' if who else ''}: {why}.", "",
         *lines, "",
         "**Merging redeploys and restarts the server.** Merge when nobody is online.",
     ])
@@ -274,6 +317,13 @@ def _read_varint(s):
 _DATA_PNG = re.compile(r"data:image/png;base64,[A-Za-z0-9+/]+={0,2}")
 
 
+def _int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def status_ping(host, port, timeout=4.0):
     """Minecraft Server List Ping: exactly what a client's server list shows."""
     t0 = time.monotonic()
@@ -293,8 +343,9 @@ def status_ping(host, port, timeout=4.0):
     r = json.loads(data)
     d = r.get("description", "")
     motd = d if isinstance(d, str) else d.get("text", "") + "".join(x.get("text", "") for x in d.get("extra", []))
-    return {"version": r.get("version", {}).get("name", "?"), "online": r.get("players", {}).get("online", 0),
-            "max": r.get("players", {}).get("max", 0), "motd": rcon._COLOR.sub("", motd), "ms": ms,
+    # int(): the counts go into the page unescaped, and a server is free to send anything.
+    return {"version": r.get("version", {}).get("name", "?"), "online": _int(r.get("players", {}).get("online")),
+            "max": _int(r.get("players", {}).get("max")), "motd": rcon._COLOR.sub("", motd), "ms": ms,
             # data:image/png;base64,... when the server has a server-icon.png
             # Checked against the base64 alphabet, not just the prefix: the icon goes
             # into a src="..." attribute, and a quote in it would close the attribute
@@ -436,6 +487,12 @@ if(!/^(localhost|127\\.0\\.0\\.1|\\[::1\\])$/.test(location.hostname))document.q
  .forEach(a=>{const u=new URL(a.href);u.hostname=location.hostname;a.href=u});
 """
 
+# Defence in depth behind the escaping: even injected markup could run no script
+# but the panel's own (pinned by hash), load nothing, and post nowhere else.
+CSP = ("default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+       f"script-src 'sha256-{base64.b64encode(hashlib.sha256(JS.encode()).digest()).decode()}'; "
+       "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+
 def settings_mode():
     """"git" when the panel can open PRs, otherwise "file".
 
@@ -446,6 +503,30 @@ def settings_mode():
     where git is the source of truth (opt-in, needs a fork and a token).
     """
     return "git" if CFG["token"] and CFG["repo"] else "file"
+
+
+_LOGIN = {}
+
+
+def login():
+    """The auth.Login for the current CFG (rebuilt only when CFG's login changes)."""
+    key = (CFG["user"], CFG["password_hash"], CFG["basic_auth"])
+    if key not in _LOGIN:
+        _LOGIN.clear()
+        _LOGIN[key] = auth.Login(*key)
+    return _LOGIN[key]
+
+
+def auth_configured():
+    """True when the panel asks for a login."""
+    return login().configured()
+
+
+PLAINTEXT_WARNING = (
+    "The panel password is stored in plain text (KPANEL_BASIC_AUTH). Run "
+    "<code>docker compose run --rm --build hashpw</code>, put the line it prints "
+    "into .env in place of KPANEL_BASIC_AUTH, and run <code>docker compose up -d</code>. "
+    "kPanel 0.4 will refuse to start with KPANEL_BASIC_AUTH.")
 
 
 def require_auth_boundary(basic_auth, allow_no_auth):
@@ -459,9 +540,128 @@ def require_auth_boundary(basic_auth, allow_no_auth):
         return
     raise SystemExit(
         "kPanel refuses to start without an access boundary.\n"
-        "  Set KPANEL_BASIC_AUTH=user:password to require a login, or\n"
+        "  Set KPANEL_PASSWORD_HASH (from `docker compose run --rm --build hashpw`)\n"
+        "  to require a login, or\n"
         "  set KPANEL_ALLOW_NO_AUTH=1 if the panel is only reachable over a\n"
         "  tailnet or VPN and that network is the boundary.")
+
+
+PEER_TTL = 10  # seconds a resolved service address is trusted; containers get new IPs on restart
+_peer_cache = {}  # names -> (expiry, frozenset of addresses)
+_peer_lock = threading.Lock()
+
+
+def resolve_peers(names: str) -> frozenset:
+    """The addresses compose's DNS gives these service names now; unknown names add none."""
+    now = time.monotonic()
+    with _peer_lock:
+        hit = _peer_cache.get(names)
+    if hit and hit[0] > now:
+        return hit[1]
+    found = set()
+    for name in (n.strip() for n in names.split(",")):
+        if not name:
+            continue
+        try:
+            found |= {ai[4][0] for ai in socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)}
+        except OSError:
+            pass  # not running right now (or no such service): nothing to match
+    with _peer_lock:
+        _peer_cache[names] = (now + PEER_TTL, frozenset(found))
+    return frozenset(found)
+
+
+def peer_allowed(addr, refuse=None, only=None, resolve=resolve_peers):
+    """May a request from this TCP peer be answered?
+
+    Every container in the stack can reach kpanel:8080 directly, with any Host
+    header it likes, so without a login the host check doesn't stop them: a
+    plugin in mc could op itself or open pull requests with the panel's token.
+    The published port's peer is the bridge gateway, the real client, or
+    something else again depending on the engine and its proxy settings, so it
+    can't be allowlisted in general. What can be named are the siblings:
+    KPANEL_REFUSE_PEERS (the base file: mc, mc-backup, filebrowser). Behind
+    tailscale.yml nothing is published and the sidecar is the only way in, so
+    KPANEL_ONLY_PEERS names just it. The panel's own container (loopback: the
+    healthcheck) is always answered.
+    """
+    refuse = CFG["refuse_peers"] if refuse is None else refuse
+    only = CFG["only_peers"] if only is None else only
+    if addr in ("127.0.0.1", "::1"):
+        return True
+    if only:
+        return addr in resolve(only)
+    return not (refuse and addr in resolve(refuse))
+
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+# Never in a Host header a browser sends: userinfo ('localhost:8080@evil.example'
+# read as 'localhost'), a path, whitespace or control characters.
+MALFORMED_HOST = re.compile(r"[@/\\\s\x00-\x1f\x7f]")
+
+
+def host_malformed(value):
+    return bool(value) and bool(MALFORMED_HOST.search(value.strip()))
+
+
+def host_name(value):
+    """The host part of a Host header or netloc, normalised: 'Example.COM.:8080' -> 'example.com'.
+
+    IPv6 keeps its brackets ('[::1]:8080' -> '[::1]'). '' for anything unusable,
+    including a value no browser would send (see MALFORMED_HOST).
+    """
+    if host_malformed(value):
+        return ""
+    v = (value or "").strip().lower()
+    if v.startswith("["):
+        end = v.find("]")
+        return v[:end + 1] if end > 0 else ""
+    if v.count(":") > 1:  # a bare IPv6 address, e.g. from an allowlist entry
+        return f"[{v}]"
+    return v.partition(":")[0].rstrip(".")
+
+
+def host_allowed(host_header, allowed=None, login=None):
+    """May a request that names this Host be answered?
+
+    DNS rebinding: a page on attacker.example re-points its own name at
+    127.0.0.1, and the browser then treats the panel as part of the attacker's
+    site, same-origin, so Sec-Fetch-Site doesn't help. The Host header still
+    says attacker.example, and that is what this rejects.
+
+    Without a login the panel answers only to localhost and the names in
+    KPANEL_ALLOWED_HOSTS. With a login, a rebinding page gets nothing anyway
+    (the browser keeps credentials per origin), so any name is fine unless
+    KPANEL_ALLOWED_HOSTS narrows it.
+    """
+    if host_malformed(host_header):
+        return False  # in every mode: no browser sends it, so only a tool does
+    allowed = CFG["allowed_hosts"] if allowed is None else allowed
+    login = auth_configured() if login is None else login
+    extra = {host_name(h) if h.strip() != "*" else "*" for h in allowed.split(",") if h.strip()}
+    if "*" in extra or (login and not extra):
+        return True
+    name = host_name(host_header)
+    return bool(name) and (name in LOOPBACK_HOSTS or name in extra)
+
+
+def same_origin(headers):
+    """CSRF: a state-changing request must come from one of the panel's own pages.
+
+    Browsers send Sec-Fetch-Site on every request; one that doesn't (Safari
+    before 16.4, old webviews) is judged by Origin, then Referer. A request with
+    none of the three is refused: no browser page sends that, and a cross-site
+    form from one of those browsers is exactly what it would look like.
+    """
+    origin = headers.get("Origin")
+    if origin and origin != "null" and urlsplit(origin).netloc.lower() != (headers.get("Host") or "").lower():
+        return False
+    site = headers.get("Sec-Fetch-Site")
+    if site is not None:
+        return site in ("same-origin", "none")
+    source = origin or headers.get("Referer") or ""
+    return bool(source) and source != "null" and \
+        urlsplit(source).netloc.lower() == (headers.get("Host") or "").lower()
 
 
 ALL_NAV = [("/", "Dashboard"), ("/settings", "Settings"), ("/players", "Players"),
@@ -480,7 +680,9 @@ def head(active, filter_placeholder="", refresh=0):
             f"<title>kPanel</title><link rel=icon type=image/png href=/favicon.png>"
             f"<style>{ui.CSS}</style></head><body{r}><header><div class=bar-in><h1>"
             f"{'<img class=logo src=/favicon.png alt=>' if FAVICON_PNG else ''}kPanel</h1>"
-            f"<nav>{links}{files}</nav>{q}</div></header><main>")
+            f"<nav>{links}{files}</nav>{q}</div></header><main>"
+            + (f'<div class="card warn note" role=alert>{ui.icon("alert-triangle")}<div>{PLAINTEXT_WARNING}</div></div>'
+               if login().deprecated else ""))
 
 
 COFFEE_URL = "https://buymeacoffee.com/kruser1337"
@@ -885,8 +1087,18 @@ def logs_page(lines, hide_rcon):
 
 # --- HTTP ---------------------------------------------------------------------
 
+MAX_FORM = 200_000  # bytes; the Settings form is about 10 KB
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "kPanel"
+    sys_version = ""  # no "Python/3.13.x" in the Server header (N-09)
+
+    def version_string(self):
+        return self.server_version
+    # Seconds a client may stall mid-request before its connection is dropped,
+    # so slow or never-finished requests can't pin worker threads.
+    timeout = 30
 
     def _send(self, code, body, ctype="text/html; charset=utf-8", cache=False):
         b = body if isinstance(body, bytes) else body.encode()
@@ -896,6 +1108,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "public, max-age=86400" if cache else "no-store")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", CSP)
         self.end_headers()
         self.wfile.write(b)
 
@@ -908,20 +1122,68 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
-    def _authorised(self):
-        """True unless basic auth is configured and the request fails it."""
-        want = CFG["basic_auth"]
-        if not want:
+    def _misdirected(self):
+        """Refuse a request for a host name the panel doesn't answer to (see host_allowed)."""
+        name = host_name(self.headers.get("Host"))[:100]
+        name = "".join(c for c in name if c.isprintable()) or "(none)"
+        print(f"refused request for host {name!r}: not localhost or in KPANEL_ALLOWED_HOSTS", flush=True)
+        return self._send(403, (
+            f"kPanel does not answer to the host name {name!r}.\n\n"
+            "This protects a panel without a login from DNS rebinding: a web page\n"
+            "pointing its own name at this machine to control the panel.\n\n"
+            "If you opened the panel by this name on purpose, add it to\n"
+            "KPANEL_ALLOWED_HOSTS (comma-separated) in .env and restart:\n\n"
+            f"  KPANEL_ALLOWED_HOSTS={name}\n"), "text/plain; charset=utf-8")
+
+    def _gate(self):
+        """True if the request may go on; otherwise the refusal has been sent.
+
+        The peer first (other containers of the stack), then the Host (DNS
+        rebinding), then the login, if there is one.
+        """
+        if not peer_allowed(self.client_address[0]):
+            print(f"refused request from {self.client_address[0]}: another container of this stack "
+                  "(KPANEL_REFUSE_PEERS / KPANEL_ONLY_PEERS)", flush=True)
+            self._send(403, "kPanel does not answer other containers of its stack.\n", "text/plain; charset=utf-8")
+            return False
+        if not host_allowed(self.headers.get("Host")):
+            self._misdirected()
+            return False
+        lg = login()
+        if not lg.configured():
             return True
-        got = self.headers.get("Authorization", "")
-        if not got.startswith("Basic "):
+        ok = lg.check(self.headers.get("Authorization", ""), self.client_address[0])
+        if ok is None:
+            wait = lg.retry_after(self.client_address[0])
+            b = f"too many failed logins; try again in {wait} s".encode()
+            self.send_response(429)
+            self.send_header("Retry-After", str(wait))
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
             return False
-        try:
-            given = base64.b64decode(got[6:]).decode("utf-8", "replace")
-        except Exception:
+        if not ok:
+            self._challenge()
+        return ok
+
+    def _files(self, path):
+        """True if this is a file-manager request, which has then been relayed."""
+        if not (CFG["files_upstream"] and filesproxy.handles(path)):
             return False
-        # compare_digest: the comparison must not leak the password by timing.
-        return hmac.compare_digest(given, want)
+        filesproxy.forward(self, CFG["files_upstream"])
+        return True
+
+    def _other_method(self):
+        """PUT, PATCH, DELETE, HEAD: only the file manager uses them."""
+        if not self._gate():
+            return
+        if self.command != "HEAD" and not same_origin(self.headers):
+            return self._send(403, "cross-site request refused", "text/plain")
+        if not self._files(self.path.split("?")[0]):
+            self._send(405, "method not allowed", "text/plain")
+
+    do_PUT = do_PATCH = do_DELETE = do_HEAD = _other_method
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -929,8 +1191,10 @@ class Handler(BaseHTTPRequestHandler):
         # reveals nothing.
         if path == "/healthz":
             return self._send(200, "ok", "text/plain")
-        if not self._authorised():
-            return self._challenge()
+        if not self._gate():
+            return
+        if self._files(path):
+            return
         if path in ("/favicon.png", "/favicon.ico") and FAVICON_PNG:
             # /favicon.ico too: some browsers ask for it regardless of the <link>,
             # and every current one renders a PNG served from that path.
@@ -959,20 +1223,29 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, page(rows, prs))
 
     def do_POST(self):
-        if not self._authorised():
-            return self._challenge()
-        # Browsers send Sec-Fetch-Site on every request; refuse cross-site posts
-        # so another page open in your browser can't act through this panel.
-        if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+        if not self._gate():
+            return
+        # Refuse cross-site posts, so another page open in your browser can't act
+        # through this panel.
+        if not same_origin(self.headers):
             return self._send(403, "cross-site request refused", "text/plain")
+        if self._files(self.path.split("?")[0]):
+            return
         if self.path not in ("/save", "/import", "/players", "/gamerules", "/restart"):
             return self._send(404, "not found", "text/plain")
         if self.path == "/import" and settings_mode() != "git":
             return self._send(404, "not found", "text/plain")
-        n = int(self.headers.get("Content-Length") or 0)
-        form = {k: v[0] for k, v in parse_qs(self.rfile.read(min(n, 200_000)).decode(),
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0:  # rfile.read(-1) would wait for the client to hang up
+            return self._send(400, "bad Content-Length", "text/plain")
+        if n > MAX_FORM:
+            return self._send(413, "form too large", "text/plain")
+        form = {k: v[0] for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace"),
                                               keep_blank_values=True).items()}
-        who = self.headers.get("Tailscale-User-Login", "")
+        who = who_from(self.headers)
         if self.path == "/players":
             try:
                 reply = do_player(form, who)
@@ -1037,6 +1310,42 @@ class Handler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} {fmt % args}", flush=True)
 
 
+PR_SET_DUMPABLE = 4
+
+
+def make_undumpable(libc=None):
+    """Defence in depth for the main process; not the boundary.
+
+    kpanel shares mc's PID namespace (for the CPU and memory graphs). The
+    boundary is the uid: the panel runs as 1001, the server and its plugins as
+    1000, and the kernel lets no process read another uid's /proc/<pid>/environ,
+    mem or root. That covers every process in this container, the healthcheck
+    and `docker compose exec` included. Non-dumpable additionally makes this
+    one's /proc entries root's. Linux only; returns whether it took.
+    """
+    try:
+        if libc is None:
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+    except (OSError, AttributeError):
+        return False
+
+
+def shares_server_uid(props=None, uid=None):
+    """True if the panel runs as the uid that owns the server's files.
+
+    Then a plugin could read this container's processes (environment: the login
+    hash, the GitHub token). The image runs as 1001, so this means someone set
+    `user:` to the server's uid.
+    """
+    try:
+        owner = os.stat(props or CFG["props"]).st_uid
+    except OSError:
+        return False
+    return owner == (os.getuid() if uid is None else uid)
+
+
 def _safe(fn):
     """Re-render after an error without letting a second failure hide the first."""
     try:
@@ -1046,10 +1355,25 @@ def _safe(fn):
 
 
 if __name__ == "__main__":
-    require_auth_boundary(CFG["basic_auth"], os.environ.get("KPANEL_ALLOW_NO_AUTH", ""))
+    if not make_undumpable() and os.path.exists("/proc/self"):
+        print("WARNING: could not make the panel non-dumpable", flush=True)
+    if shares_server_uid():
+        print(f"WARNING: the panel runs as uid {os.getuid()}, the owner of {CFG['props']}: code in the "
+              "server could read the panel's environment. Run it as another uid in the server's "
+              "group (the image's default is 1001:1000).", flush=True)
+    try:
+        login().validate()
+    except auth.LoginError as ex:
+        raise SystemExit(f"kPanel refuses to start: {ex}") from None
+    require_auth_boundary(auth_configured(), os.environ.get("KPANEL_ALLOW_NO_AUTH", ""))
+    if login().deprecated:
+        print("WARNING: " + re.sub(r"</?code>", "`", PLAINTEXT_WARNING), flush=True)
+    elif CFG["basic_auth"]:
+        print("WARNING: KPANEL_BASIC_AUTH is ignored because KPANEL_PASSWORD_HASH is set; "
+              "remove it from .env.", flush=True)
     port = int(os.environ.get("PORT", "8080"))
     print(f"kPanel on :{port}, settings {settings_mode()}, "
-          f"auth {'basic' if CFG['basic_auth'] else 'none (network is the boundary)'}, "
+          f"auth {('basic, plaintext (deprecated)' if login().deprecated else 'basic, argon2id') if auth_configured() else 'none (network is the boundary)'}, "
           f"rcon {CFG['rcon_host']}:{CFG['rcon_port']} password {'set' if CFG['rcon_password'] else 'from server.properties'}",
           flush=True)
     threading.Thread(target=sampler, daemon=True, name="history-sampler").start()

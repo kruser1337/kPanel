@@ -1,7 +1,7 @@
 """Dashboard history: one sample every few minutes, persisted as JSON, drawn as sparklines.
 
 The panel is otherwise stateless, so this is its only state on disk: a small
-JSON file on the kpanel-data volume, so the graphs survive restarts and
+JSON file on the kpanel-state volume, so the graphs survive restarts and
 redeploys. Writes are atomic (temp file + rename), so a crash mid-write can't
 leave a half-written file.
 """
@@ -19,6 +19,7 @@ class History:
     def __init__(self, path: str, keep: int = KEEP):
         self.path, self.keep, self.lock = path, keep, threading.Lock()
         self.samples = self._load()
+        self.save_failed = False  # report a failing save once, not every sample
 
     def _load(self):
         try:
@@ -37,8 +38,12 @@ class History:
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(self.samples, f)
                 os.replace(tmp, self.path)
+                self.save_failed = False
             except OSError as ex:
-                print(f"history: could not save {self.path}: {ex}", flush=True)
+                if not self.save_failed:
+                    print(f"history: could not save {self.path}: {ex} (the graphs work, but start "
+                          "over on a restart; is the kpanel-state volume mounted there?)", flush=True)
+                self.save_failed = True
 
     def series(self, key: str, n: int):
         """The last n stored (time, value) pairs that have this metric."""

@@ -49,11 +49,41 @@ class Base(unittest.TestCase):
             env = BASE["services"][name].get("environment") or {}
             self.assertNotIn("RCON_PASSWORD", env, name)
 
-    def test_panel_and_files_are_published_on_loopback_only(self):
-        """That, and only that, is what makes running them without a login safe."""
-        for name in ("kpanel", "filebrowser"):
-            for spec in BASE["services"][name]["ports"]:
-                self.assertTrue(spec.startswith("127.0.0.1:"), f"{name}: {spec}")
+    def test_the_panel_is_published_on_loopback_only(self):
+        """That, plus the Host check against DNS rebinding, is what makes no login safe."""
+        for spec in BASE["services"]["kpanel"]["ports"]:
+            self.assertTrue(spec.startswith("127.0.0.1:"), spec)
+
+    def test_the_file_manager_is_published_nowhere(self):
+        """It has no login of its own: the panel serves it, behind its checks (F-02)."""
+        self.assertNotIn("ports", BASE["services"]["filebrowser"])
+        env = BASE["services"]["kpanel"]["environment"]
+        self.assertEqual(env["FILES_UPSTREAM"], "http://filebrowser:80")
+        self.assertNotIn("FILES_URL", env)  # the panel's own /files/
+
+    def test_the_file_manager_runs_under_the_panels_path(self):
+        script = BASE["services"]["filebrowser"]["entrypoint"][2]
+        config = yaml.safe_load(script.split("<<'EOF'\n", 1)[1].split("\nEOF", 1)[0])
+        self.assertEqual(config["server"]["baseURL"], "/files/")
+        self.assertTrue(config["auth"]["methods"]["noauth"])
+
+    def test_the_file_manager_config_is_not_templated(self):
+        """F-05: a value expanded into YAML by the shell can break or rewrite it.
+        The heredoc is quoted and holds no variable at all."""
+        script = BASE["services"]["filebrowser"]["entrypoint"][2]
+        self.assertIn("<<'EOF'", script)
+        # Not anywhere in the script either: Coolify users copy this block, and
+        # Coolify claims every dollar in a compose file as its own variable.
+        self.assertNotIn("$", script)
+
+    def test_the_file_manager_drops_a_database_holding_a_password(self):
+        """N-03: 0.2's lan.yml left FILES_PASSWORD in plain text in FileBrowser's
+        database; noauth never rewrites that record. Proved on a real 0.2.2
+        volume by tests/integration/upgrade_filebrowser_db.sh."""
+        script = BASE["services"]["filebrowser"]["entrypoint"][2]
+        cleanup, start = script.index("database.db"), script.index("exec ./filebrowser")
+        self.assertLess(cleanup, start)
+        self.assertIn('"adminPassword":"[^"]', script)
 
     def test_only_the_game_is_published_to_the_network(self):
         wide = [(n, p) for n, s in BASE["services"].items() for p in s.get("ports", [])
@@ -83,9 +113,99 @@ class Base(unittest.TestCase):
         self.assertNotIn("PAPER_CHANNEL", env)
         self.assertTrue(env["PAPER_BUILD"].isdigit())  # pinned, never floating
 
+    def test_the_panel_runs_capless_and_read_only(self):
+        """F-03/F-12: it needs no capability and writes only to its volumes."""
+        k = BASE["services"]["kpanel"]
+        self.assertTrue(k["read_only"])
+        self.assertEqual(k["cap_drop"], ["ALL"])
+
+    def test_no_service_can_gain_privileges(self):
+        for name, svc in {**BASE["services"], "tailscale": TAILSCALE["services"]["tailscale"]}.items():
+            self.assertIn("no-new-privileges:true", svc.get("security_opt", []), name)
+
+    def test_backups_run_without_root_powers(self):
+        """N-06: mc-backup ran as root with Docker's default capabilities. crond
+        must stay root (the image requires it); the backups themselves don't."""
+        b = BASE["services"]["mc-backup"]
+        self.assertEqual(b["cap_drop"], ["ALL"])
+        self.assertEqual(sorted(b["cap_add"]), ["CHOWN", "SETGID", "SETUID"])
+        self.assertEqual(b["environment"]["CRON_BACKUP_UID"], "1000")
+        self.assertIn("chown 1000:1000 /backups", b["entrypoint"][-1])
+        self.assertIn("mc-data:/data:ro", b["volumes"])
+
+    def test_every_image_is_pinned(self):
+        """No implicit :latest: an upstream push must not change a running stack."""
+        for name, svc in {**BASE["services"], "tailscale": TAILSCALE["services"]["tailscale"]}.items():
+            if "image" in svc:
+                tag = svc["image"].rpartition(":")[2] if ":" in svc["image"] else ""
+                self.assertNotIn(tag, ("", "latest"), name)
+
     def test_the_base_carries_no_profiles(self):
+        """Coolify silently skips a profiled service. Only hashpw, a one-shot
+        tool that `up` must not start anyway, may have one."""
         for name, svc in BASE["services"].items():
-            self.assertIsNone(svc.get("profiles"), name)
+            if name != "hashpw":
+                self.assertIsNone(svc.get("profiles"), name)
+            self.assertNotIn("hashpw", svc.get("depends_on", {}), name)
+
+    def test_the_password_is_hashed_outside_the_servers_reach(self):
+        """N-01: in kpanel's container, hashpw.py sat in the server's process
+        namespace with the password in memory. Its own service has no network,
+        no volumes, no environment and its own PID namespace."""
+        h = BASE["services"]["hashpw"]
+        self.assertEqual(h["profiles"], ["tools"])
+        self.assertEqual(h["network_mode"], "none")
+        for key in ("pid", "environment", "env_file", "volumes", "ports"):
+            self.assertNotIn(key, h)
+        self.assertTrue(h["read_only"])
+        self.assertEqual(h["cap_drop"], ["ALL"])
+
+    def test_the_panel_does_not_run_as_the_servers_uid(self):
+        """N-01: it shares the server's PID namespace, so a shared uid would let
+        a plugin read every panel process's environment."""
+        dockerfile = (ROOT / "kpanel" / "Dockerfile").read_text()
+        self.assertIn("USER 1001:1000", dockerfile)
+        self.assertNotIn("user", BASE["services"]["kpanel"])  # no override back to 1000
+        self.assertIn("kpanel-state:/var/lib/kpanel", BASE["services"]["kpanel"]["volumes"])
+
+
+    def test_only_the_panel_can_reach_the_file_manager(self):
+        """N-05: on the default network, code in mc reached the login-less
+        FileBrowser directly (http://filebrowser:80/files/ -> 200)."""
+        self.assertTrue(BASE["networks"]["files"]["internal"])
+        on_files = {n for n, svc in BASE["services"].items() if "files" in svc.get("networks", [])}
+        self.assertEqual(on_files, {"filebrowser", "kpanel"})
+        self.assertEqual(BASE["services"]["filebrowser"]["networks"], ["files"])
+        self.assertIn("default", BASE["services"]["kpanel"]["networks"])  # RCON, published port
+
+    def test_the_panel_refuses_every_sibling_service(self):
+        """N-05: each other long-running service of the stack is named."""
+        refused = set(BASE["services"]["kpanel"]["environment"]["KPANEL_REFUSE_PEERS"].split(","))
+        siblings = {n for n, svc in BASE["services"].items() if n != "kpanel" and not svc.get("profiles")}
+        self.assertEqual(refused, siblings)
+
+
+class Image(unittest.TestCase):
+    def test_the_image_copies_every_module_the_panel_imports(self):
+        """The Dockerfile lists its files; a module missing there passes every
+        test here and crashes the panel on start (it did, once: filesproxy.py)."""
+        import ast
+        here = pathlib.Path(__file__).parent
+        dockerfile = (here / "Dockerfile").read_text()
+        copy = dockerfile.split("COPY app.py", 1)[1].split("./\n", 1)[0]
+        copied = {"app.py"} | set(copy.replace("\\", " ").split())
+        local = {f.stem for f in here.glob("*.py")}
+        todo, seen = ["app.py", "hashpw.py"], set()
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            for node in ast.walk(ast.parse((here / name).read_text())):
+                mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                    [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
+                todo += [f"{m}.py" for m in mods if m in local]
+        self.assertEqual(seen - copied, set())
 
 
 LAN_TEXT = (ROOT / "compose" / "lan.yml").read_text()
@@ -98,26 +218,32 @@ class LanOverlay(unittest.TestCase):
 
     def test_bind_addresses_are_literal(self):
         """An empty ${BIND} renders ":8080:8080", which means every interface."""
-        for name in ("kpanel", "filebrowser"):
-            for spec in LAN["services"][name]["ports"]:
-                self.assertNotIn("${", spec, name)
+        for spec in LAN["services"]["kpanel"]["ports"]:
+            self.assertNotIn("${", spec)
 
     def test_it_replaces_the_loopback_binding_rather_than_adding_to_it(self):
         self.assertRegex(LAN_TEXT, r"(?m)^  kpanel:\n    # .*\n    ports: !override")
-        self.assertRegex(LAN_TEXT, r"(?m)^  filebrowser:\n    ports: !override")
 
-    def test_both_passwords_are_required_by_compose(self):
-        """${VAR:?} makes `up` fail before any container starts."""
-        self.assertIn("${KPANEL_BASIC_AUTH:?", LAN_TEXT)
-        self.assertIn("${FILES_PASSWORD:?", LAN_TEXT)
+    def test_the_file_manager_stays_unpublished(self):
+        """It rides along at /files/, behind the panel's login."""
+        self.assertNotIn("filebrowser", LAN["services"])
+        self.assertNotIn("FILES_PASSWORD", LAN_TEXT)
+
+    def test_the_panel_login_is_a_hash_passed_through_from_the_base(self):
+        """The base carries it; compose can't require "a hash or the old plaintext",
+        so the panel enforces it (test_the_panel_itself_also_refuses_without_a_login)."""
+        env = BASE["services"]["kpanel"]["environment"]
+        self.assertEqual(env["KPANEL_PASSWORD_HASH"], "${KPANEL_PASSWORD_HASH:-}")
+        self.assertNotIn("KPANEL_BASIC_AUTH", LAN["services"]["kpanel"]["environment"])
+
+    def test_the_example_env_holds_no_usable_password(self):
+        """A placeholder someone uncomments unchanged is a public password."""
+        for line in ENV_EXAMPLE.splitlines():
+            if line.startswith(("# KPANEL_BASIC_AUTH=", "# FILES_PASSWORD=")):
+                self.assertEqual(line.split("=", 1)[1], "", line)
 
     def test_the_panel_itself_also_refuses_without_a_login(self):
         self.assertEqual(LAN["services"]["kpanel"]["environment"]["KPANEL_ALLOW_NO_AUTH"], "")
-
-    def test_the_file_manager_uses_the_password(self):
-        entry = LAN["services"]["filebrowser"]["entrypoint"][2]
-        self.assertIn("adminPassword", entry)
-        self.assertNotIn("noauth", entry)
 
     def test_it_only_overrides_services_that_exist(self):
         """A name that matches nothing in the base silently does nothing."""
@@ -128,12 +254,40 @@ class TailscaleOverlay(unittest.TestCase):
     def test_nothing_but_the_game_is_published(self):
         """The tailnet is the boundary; a published port would bypass it."""
         self.assertRegex(TAILSCALE_TEXT, r"(?m)^  kpanel:\n(    #.*\n)*    ports: !reset \[\]")
-        self.assertRegex(TAILSCALE_TEXT, r"(?m)^  filebrowser:\n    ports: !reset \[\]")
+        self.assertNotIn("filebrowser", TAILSCALE["services"])  # unpublished in the base already
+
+    def test_the_sidecar_serves_only_the_panel(self):
+        """The file manager is the panel's /files/ now; no second port to it."""
+        script = TAILSCALE["services"]["tailscale"]["entrypoint"][2]
+        self.assertNotIn("8443", script)
+        self.assertNotIn("filebrowser", script)
+
+    def test_names_that_would_break_the_serve_json_are_refused(self):
+        """F-05's sibling: TS_HOSTNAME/TS_TAILNET go into JSON unescaped."""
+        import subprocess
+        script = TAILSCALE["services"]["tailscale"]["entrypoint"][2].replace("$$", "$")
+        script = script.replace("cat > /tmp/serve.json", "cat > /dev/null").replace(
+            "exec /usr/local/bin/containerboot", "echo started")
+        for host, ok in (("kpanel", True), ('x", "Proxy": "http://evil', False), ("a b", False)):
+            r = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                               env={"TS_HOSTNAME": host, "TS_TAILNET": "tail1234.ts.net", "PATH": "/bin:/usr/bin"})
+            self.assertEqual(r.stdout.strip() == "started", ok, (host, r.stdout, r.stderr))
+
+    def test_the_auth_key_is_used_once(self):
+        """README: the key is needed on first boot only; the login persists."""
+        ts = TAILSCALE["services"]["tailscale"]
+        self.assertEqual(ts["environment"]["TS_AUTH_ONCE"], "true")
+        self.assertIn("tailscale-state:/var/lib/tailscale", ts["volumes"])
 
     def test_its_variables_are_required(self):
         """An empty TS_HOSTNAME builds a serve config for ".", silently serving nothing."""
         for var in ("TS_AUTHKEY", "TS_HOSTNAME", "TS_TAILNET"):
             self.assertIn("${" + var + ":?", TAILSCALE_TEXT)
+
+    def test_only_the_sidecar_is_answered(self):
+        env = TAILSCALE["services"]["kpanel"]["environment"]
+        self.assertEqual(env["KPANEL_ONLY_PEERS"], "tailscale")
+        self.assertIn("tailscale", TAILSCALE["services"])
 
     def test_the_sidecar_has_no_container_hostname(self):
         """It would collide with a service name in the compose network's DNS."""

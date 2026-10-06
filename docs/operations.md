@@ -146,15 +146,16 @@ manager and restart, but don't manage the same plugin both ways.
 
 ## File manager
 
-<http://localhost:8081>: the whole server folder (world, configs, logs,
-plugins), plus the backups, read-only.
+<http://localhost:8080/files/> (the panel's **Files** link): the whole server
+folder (world, configs, logs, plugins), plus the backups, read-only.
 
 - **Don't edit or replace files under `world*/` while players are online.** The
   server holds them in memory and will overwrite or corrupt your change. Stop it
   first: `docker compose stop mc`.
 - Downloading a `world*/` folder is the easy way to take a copy home.
-- Without `compose/lan.yml` it has no login, because only this machine can
-  reach it. With it, it requires `FILES_PASSWORD`.
+- It has no port and no login of its own: the panel serves it, so it is
+  reachable exactly where the panel is, behind the panel's login when there is
+  one. (Until 0.2 it had its own port, 8081, and `FILES_PASSWORD`; both are gone.)
 
 ## Backups
 
@@ -209,6 +210,10 @@ git pull
 docker compose up -d --build
 ```
 
+Some releases need a step of your own; [`CHANGELOG.md`](../CHANGELOG.md) says
+which, under **Upgrading**. (0.2 → 0.3: replace `KPANEL_BASIC_AUTH` with a
+password hash, if you use one; the dashboard graphs start over once.)
+
 **Minecraft / Paper:** the version is pinned in `docker-compose.yml`
 (`VERSION`, `PAPER_BUILD`, and `PAPER_CHANNEL` for beta builds). Never let it
 float: a restart could silently change the jar. The default is the newest
@@ -238,7 +243,9 @@ from before the upgrade. The Java version comes from the image tag
 | Symptom | Check |
 |---|---|
 | `docker compose up` says `required variable … is missing a value` | An overlay needs a value in `.env`; the message names it. See [`.env.example`](../.env.example) |
-| The panel container keeps restarting, log says it `refuses to start` | It is reachable without a login and wasn't told that's intended. Set `KPANEL_BASIC_AUTH`, or use the base file alone (loopback) |
+| The panel container keeps restarting, log says it `refuses to start` | It is reachable without a login and wasn't told that's intended. Set `KPANEL_PASSWORD_HASH` (see [Optional extras](../README.md#optional-extras)), or use the base file alone (loopback). If it says the hash `is not an argon2 hash`, the single quotes around it in `.env` are missing |
+| The panel answers `too many failed logins` (HTTP 429) | Five wrong passwords in a row from your address; it waits 1 s, then doubles each time, up to 5 min. Wait, then log in with the right one |
+| The panel says it `does not answer to the host name` | Without a login it answers only to `localhost`, against DNS rebinding. Add the name you use to `KPANEL_ALLOWED_HOSTS` in `.env` |
 | `ports: !override` / `!reset` is rejected | Docker Compose is older than 2.24. Upgrade it |
 | Players can't connect | Is 25565 open in the host's firewall, and forwarded on your router for players outside your network? `nc -z <host> 25565` from outside |
 | "You are not white-listed on this server" | Add them on the Players page, or `rcon-cli whitelist add <name>` |

@@ -37,6 +37,21 @@ class Store(unittest.TestCase):
         h.add({"t": 3, "tps": 19.5})
         self.assertEqual(h.series("tps", 5), [(1, 20.0), (3, 19.5)])
 
+    def test_an_unwritable_volume_is_reported_once_not_every_sample(self):
+        """A hand-built compose file that still mounts the old kpanel-data
+        volume (owned by the old uid): CHANGELOG says the log says so once."""
+        import contextlib, io
+        os.makedirs(os.path.dirname(self.path))
+        os.chmod(os.path.dirname(self.path), 0o500)
+        self.addCleanup(os.chmod, os.path.dirname(self.path), 0o700)
+        h = history.History(self.path)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            for i in range(5):
+                h.add({"t": i, "players": i})
+        self.assertEqual(out.getvalue().count("could not save"), 1)
+        self.assertEqual(len(h.series("players", 9)), 5)  # the graphs still work
+
     def test_corrupt_file_starts_empty_instead_of_crashing(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, "w") as f:

@@ -5,16 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+# Read the code, nothing else: the tests need no write access or secrets.
+permissions:
+  contents: read
+
 jobs:
   unittest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.x"
-      # The panel's only third-party dependency; everything else is stdlib.
-      - run: pip install pyyaml
+      # The image's pinned dependencies, so tests run against what ships.
+      - run: pip install -r kpanel/requirements.txt
       # No PROPS_FIXTURE: the suite falls back to kpanel/testdata/server.properties,
       # so this is the same run a contributor gets on a fresh clone.
       - name: Run tests

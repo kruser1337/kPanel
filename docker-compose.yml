@@ -6,7 +6,7 @@
 # panel and file manager open on this machine only:
 #
 #   panel         http://localhost:8080
-#   file manager  http://localhost:8081
+#   file manager  http://localhost:8080/files/  (served by the panel)
 #
 # Optional extras are overlays, added with -f (see README.md):
 #   compose/lan.yml        reach the panel from other devices on your network
@@ -22,6 +22,9 @@ services:
     # Paper 26.x needs Java 25; the java21 tag fails with UnsupportedClassVersionError.
     image: itzg/minecraft-server:stable-java25
     restart: unless-stopped
+    # No setuid binary in the container can gain privileges (itzg drops from
+    # root to uid 1000 without one, so this costs nothing).
+    security_opt: ["no-new-privileges:true"]
     tty: true
     stdin_open: true
     # The game port, on every interface: this is what players connect to.
@@ -71,10 +74,24 @@ services:
       - mc-data:/data
 
   mc-backup:
-    image: itzg/mc-backup
+    # Pinned, like the server: a broken or compromised latest would otherwise
+    # arrive with the next pull.
+    image: itzg/mc-backup:2026.9.3
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    # The image's cron scheduling refuses to run unless crond is root, so crond
+    # stays root, with only what it needs: CHOWN for the line below, SETUID and
+    # SETGID to start each backup as uid 1000 (CRON_BACKUP_UID), which then has
+    # no capability at all. /backups is handed to 1000 on every start: until
+    # 0.2 the backups were taken as root, so an existing volume is root's. The
+    # archives already in it stay root's and readable; pruning them needs only
+    # the directory.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    entrypoint: ["/bin/sh", "-c", "chown 1000:1000 /backups && exec /usr/bin/backup loop"]
     environment:
       TZ: "${TZ:-Etc/UTC}"
+      CRON_BACKUP_UID: "1000"
       # Twice a day at fixed clock times, keeping the newest 4 (two days back).
       # A cron schedule rather than an interval: an interval restarts with the
       # container, so frequent restarts would mean no backups at all.
@@ -101,12 +118,14 @@ services:
     # FileBrowser Quantum, the maintained fork of filebrowser/filebrowser.
     image: gtstef/filebrowser:1.5.6-stable-slim
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 384m
-    # Published on loopback only, so no login is needed: only this machine can
-    # reach it. compose/lan.yml turns a password on when it publishes wider.
-    ports:
-      - "127.0.0.1:8081:80"
-    # The config is written on every start, so it lives here. defaultEnabled
+    # Published nowhere, and no login of its own: the panel serves it under
+    # /files/ (FILES_UPSTREAM below), behind the panel's host check and login.
+    # On a port of its own, a web page using DNS rebinding could write to /data,
+    # a plugin .jar included, and so run code in the server.
+    # The config is written on every start, so it lives here. It holds no
+    # variables, and the quoted 'EOF' keeps the shell from expanding any. defaultEnabled
     # must be explicit on every source: with more than one, Quantum otherwise
     # defaults to false and users get "no access to source".
     entrypoint:
@@ -116,6 +135,7 @@ services:
         cat > /tmp/config.yaml <<'EOF'
         server:
           port: 80
+          baseURL: /files/
           disableUpdateCheck: true
           disablePreviews: true
           disableWebDAV: true
@@ -133,6 +153,20 @@ services:
           methods:
             noauth: true
         EOF
+        # kPanel 0.2 with compose/lan.yml gave the file manager a password,
+        # and FileBrowser kept it in plain text in its database's settings,
+        # which the noauth config above never rewrites. Without a login nothing
+        # in the database is needed, so one holding a password is dropped
+        # (FileBrowser recreates it). A fresh one stores "adminPassword":"".
+        # No variable on purpose: Coolify claims every dollar in a compose file.
+        cd /home/filebrowser/data
+        if [ -f database.db ] && grep -q -e '"adminPassword":"[^"]' -e '"noauth":false' database.db; then
+          rm -f database.db && echo "kPanel: removed the file manager's old database: it held a password"
+        fi
+        cd /home/filebrowser
+        # The server's umask: files it writes stay group-writable, so the panel
+        # (group 1000) can still save a server.properties uploaded here.
+        umask 002
         exec ./filebrowser -c /tmp/config.yaml
     # uid 1000, like the server, so files it writes stay readable. Don't edit
     # world/ files while players are online.
@@ -140,18 +174,31 @@ services:
       - mc-data:/data
       - mc-backups:/backups:ro
       - filebrowser-db:/home/filebrowser/data
+    # Only the panel can reach it: on the default network, code in the server
+    # could use this login-less file manager directly.
+    networks: [files]
 
   # The panel: dashboard, settings, players, gamerules, logs.
   kpanel:
     build:
       context: ./kpanel
     restart: unless-stopped
+    # The panel needs no Linux capability and writes only to its volumes, so
+    # it runs with none and a read-only root filesystem: code that gets in
+    # can't change the panel's own files or gain privileges.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 96m
     # Shares mc's process namespace to read the JVM's CPU and memory from /proc.
     # Deliberately not the Docker socket, which would expose every container's
-    # environment on the host.
+    # environment on the host. The image runs as uid 1001 (group 1000), not the
+    # server's 1000: the kernel lets no server process, plugins included, read
+    # the environment or memory of any process here, the healthcheck and
+    # `docker compose exec` included.
     pid: "service:mc"
-    # Loopback only. That is what makes running without a login safe here.
+    # Loopback only. That, with the panel's Host check against DNS rebinding
+    # (KPANEL_ALLOWED_HOSTS below), is what makes running without a login safe.
     ports:
       - "127.0.0.1:8080:8080"
     environment:
@@ -159,7 +206,17 @@ services:
       # it is told how it is protected. Here: only this machine can reach it.
       # compose/lan.yml clears this and requires KPANEL_BASIC_AUTH instead.
       KPANEL_ALLOW_NO_AUTH: "1"
+      # The login, when there is one: an argon2id hash, never the password.
+      # Make it with `docker compose run --rm --build hashpw` (service below).
+      KPANEL_USER: "${KPANEL_USER:-admin}"
+      KPANEL_PASSWORD_HASH: "${KPANEL_PASSWORD_HASH:-}"
+      # Deprecated: the password in plain text, user:password. Still works, with
+      # a warning on every page; kPanel 0.4 refuses it.
       KPANEL_BASIC_AUTH: "${KPANEL_BASIC_AUTH:-}"
+      # Without a login the panel answers only to localhost, so a web page can't
+      # point its own domain at this machine and drive the panel (DNS
+      # rebinding). Names you open it by on purpose go here, comma-separated.
+      KPANEL_ALLOWED_HOSTS: "${KPANEL_ALLOWED_HOSTS:-}"
       # The footer asks api.github.com twice a day for a newer kPanel release.
       # Set KPANEL_UPDATE_CHECK=0 to never contact GitHub for it.
       KPANEL_UPDATE_CHECK: "${KPANEL_UPDATE_CHECK:-1}"
@@ -169,24 +226,56 @@ services:
       GITHUB_REPO: "${KPANEL_GITHUB_REPO:-}"
       GITHUB_BRANCH: "main"
       COMPOSE_PATH: "docker-compose.yml"
-      # The file manager. A localhost link is rewritten in the browser to the
-      # host you opened the panel on, so it also works from another device.
-      FILES_URL: "http://localhost:8081/"
+      # The file manager, served by the panel at /files/ (the Files link).
+      FILES_UPSTREAM: "http://filebrowser:80"
+      # The other containers here reach the panel straight over the compose
+      # network, with any Host header; without a login, code in the server
+      # could drive the panel that way. Their requests are refused.
+      KPANEL_REFUSE_PEERS: "mc,mc-backup,filebrowser"
       RCON_HOST: "mc"
       RCON_PORT: "25575"
       # What players type to connect; the dashboard shows and pings it.
       PUBLIC_HOST: "${MC_PUBLIC_HOST:-localhost}"
       GAME_HOST: "mc"
-    # Writable for one file: Settings saves server.properties. Everything else
-    # the panel changes goes through RCON.
+    # Read-write, and not for one file only: Settings writes server.properties
+    # in place (everything else goes through RCON), but the server creates its
+    # files group-writable, so group 1000 can write nearly all of /data,
+    # plugins/ included. Code that takes over the panel can run code in the
+    # server. Keep the panel behind its login or on loopback.
     volumes:
       - mc-data:/data
       - mc-backups:/backups:ro
-      # The panel's only state: dashboard history.
-      - kpanel-data:/var/lib/kpanel
+      # The panel's only state: dashboard history. (kpanel-data up to 0.2,
+      # owned by the old uid 1000; a fresh volume gets the image's ownership.)
+      - kpanel-state:/var/lib/kpanel
+    # default: the server (RCON) and the published port; files: the file manager.
+    networks: [default, files]
+
+  # Makes the panel's login hash. Not started by `up`; run it when you need it:
+  #
+  #   docker compose run --rm --build hashpw
+  #
+  # It asks for the password and prints the KPANEL_PASSWORD_HASH line for .env.
+  # A container of its own: no network, no volumes, no environment, and not in
+  # the server's process namespace, so nothing in the server can watch the
+  # password being typed.
+  hashpw:
+    build:
+      context: ./kpanel
+    profiles: [tools]
+    command: ["python", "hashpw.py"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  # The panel and the file manager, nothing else, and no way out.
+  files:
+    internal: true
 
 volumes:
   mc-data:
   mc-backups:
   filebrowser-db:
-  kpanel-data:
+  kpanel-state:

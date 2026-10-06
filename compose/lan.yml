@@ -2,15 +2,14 @@
 #
 #   docker compose -f docker-compose.yml -f compose/lan.yml up -d
 #
-# Publishes both on every interface of this host, so both need a password, and
-# compose refuses to start until they are set (in .env, next to
-# docker-compose.yml):
+# Publishes the panel on every interface of this host, so it needs a login,
+# and refuses to start until it has one (in .env, next to docker-compose.yml):
 #
-#   KPANEL_BASIC_AUTH=admin:a-long-password
-#   FILES_PASSWORD=another-long-password
+#   KPANEL_PASSWORD_HASH='$argon2id$...'   from: docker compose run --rm --build hashpw
 #
-# Then open http://<this-host>:8080. This is plain HTTP: fine on a home
-# network, not across the internet. For that, use compose/tailscale.yml.
+# Then open http://<this-host>:8080. The file manager comes along at /files/,
+# behind the same login. This is plain HTTP: fine on a home network, not
+# across the internet. For that, use compose/tailscale.yml.
 #
 # Needs Docker Compose 2.24 or newer (for !override).
 
@@ -21,38 +20,6 @@ services:
       - "0.0.0.0:8080:8080"
     environment:
       # Reachable from the network now, so "no login" is no longer an option:
-      # with this cleared, the panel itself also refuses to start without a login.
+      # with this cleared, the panel refuses to start without KPANEL_PASSWORD_HASH
+      # (or the deprecated KPANEL_BASIC_AUTH) in .env.
       KPANEL_ALLOW_NO_AUTH: ""
-      KPANEL_BASIC_AUTH: "${KPANEL_BASIC_AUTH:?compose/lan.yml publishes the panel: set KPANEL_BASIC_AUTH=user:password in .env}"
-
-  filebrowser:
-    ports: !override
-      - "0.0.0.0:8081:80"
-    environment:
-      FILES_PASSWORD: "${FILES_PASSWORD:?compose/lan.yml publishes the file manager: set FILES_PASSWORD in .env}"
-    # Same config as the base, with a password instead of noauth.
-    # $$ is compose's escape for a literal dollar, so the shell expands it.
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        cat > /tmp/config.yaml <<EOF
-        server:
-          port: 80
-          disableUpdateCheck: true
-          disablePreviews: true
-          disableWebDAV: true
-          sources:
-            - path: /data
-              name: minecraft
-              config:
-                defaultEnabled: true
-            - path: /backups
-              name: backups
-              config:
-                defaultEnabled: true
-                readOnly: true
-        auth:
-          adminPassword: "$${FILES_PASSWORD}"
-        EOF
-        exec ./filebrowser -c /tmp/config.yaml

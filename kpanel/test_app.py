@@ -9,6 +9,7 @@ runs exactly as in production.
 """
 
 import base64
+import http.client
 import json
 import re
 import os
@@ -231,6 +232,8 @@ class App(unittest.TestCase):
         self.assertNotIn("debug", expected)
 
     def test_save_opens_pr_with_only_the_changed_keys(self):
+        app.CFG["trust_ts_headers"] = True  # behind tailscale serve
+        self.addCleanup(app.CFG.update, trust_ts_headers=False)
         status, body = self.post("/save", {
             "p:difficulty": OTHER_DIFFICULTY,  # changed
             "p:max-players": "8",            # unchanged: must not appear
@@ -389,6 +392,44 @@ class App(unittest.TestCase):
         self.assertEqual(after["rcon.password"], before["rcon.password"])  # secrets untouched
         self.assertEqual(FakeGitHub.opened, [])
 
+    def test_file_mode_writes_in_place_without_needing_a_writable_directory(self):
+        """N-01: the panel is uid 1001 in group 1000, and /data is 0750: only the
+        file's own group write bit is there, so no temp file and rename."""
+        props = self.file_mode()
+        inode = props.stat().st_ino
+        os.chmod(props.parent, 0o500)  # the directory can't take a new entry
+        self.addCleanup(os.chmod, props.parent, 0o700)
+        status, body = self.post("/save", {"p:motd": "in place"})
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(st.parse_properties(props.read_text())["motd"], "in place")
+        self.assertEqual(props.stat().st_ino, inode)
+        self.assertEqual(os.listdir(props.parent), ["server.properties"])
+        # a shorter file leaves no tail of the old one behind
+        before = props.read_text()
+        self.post("/save", {"p:motd": "x"})
+        self.assertEqual(st.parse_properties(props.read_text()).keys(), st.parse_properties(before).keys())
+
+    def test_file_mode_refuses_to_follow_a_planted_symlink(self):
+        """The server owns /data: a symlink in place of server.properties must
+        not turn the panel's write into a write somewhere else."""
+        props = self.file_mode()
+        target = props.parent / "elsewhere"
+        target.write_text(props.read_text())
+        props.unlink()
+        props.symlink_to(target)
+        before = target.read_text()
+        status, _ = self.post("/save", {"p:motd": "redirected"})
+        self.assertEqual(status, 502)
+        self.assertEqual(target.read_text(), before)
+
+    def test_file_mode_explains_a_file_that_is_not_group_writable(self):
+        props = self.file_mode()
+        os.chmod(props, 0o444)
+        self.addCleanup(os.chmod, props, 0o644)
+        status, body = self.post("/save", {"p:motd": "nope"})
+        self.assertEqual(status, 502)
+        self.assertIn("chmod g+w", body)
+
     def test_file_mode_validation_errors_write_nothing(self):
         props = self.file_mode()
         before = props.read_text()
@@ -431,6 +472,227 @@ class App(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(FakeMinecraft.sent, [])
 
+    # --- DNS rebinding and CSRF ----------------------------------------------------
+
+    def raw(self, method, path, headers, data=None):
+        """A request with exactly these headers: urllib would add or keep ones a test must leave out."""
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=5)
+        body = urllib.parse.urlencode(data).encode() if data is not None else None
+        c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+        for k, v in headers.items():
+            c.putheader(k, v)
+        if body is not None:
+            c.putheader("Content-Type", "application/x-www-form-urlencoded")
+            c.putheader("Content-Length", str(len(body)))
+        c.endheaders(body)
+        r = c.getresponse()
+        out = r.status, r.read().decode()
+        c.close()
+        return out
+
+    def here(self):
+        return f"127.0.0.1:{self.srv.server_address[1]}"
+
+    def test_a_rebound_host_name_is_refused_without_a_login(self):
+        """What a browser sends after attacker.example re-points itself at 127.0.0.1."""
+        port = self.srv.server_address[1]
+        status, body = self.raw("GET", "/logs", {"Host": f"attacker.example:{port}"})
+        self.assertEqual(status, 403)
+        self.assertIn("KPANEL_ALLOWED_HOSTS=attacker.example", body)
+        self.assertNotIn("ANCIENT", body)
+
+    def test_a_rebound_post_changes_nothing(self):
+        port = self.srv.server_address[1]
+        rebound = {"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}",
+                   "Sec-Fetch-Site": "same-origin"}
+        for path, form in (("/players", {"action": "op", "name": "Mallory"}), ("/restart", {})):
+            status, _ = self.raw("POST", path, rebound, form)
+            self.assertEqual(status, 403, path)
+        self.assertEqual(FakeMinecraft.sent, [])
+
+    def test_loopback_names_are_always_answered(self):
+        port = self.srv.server_address[1]
+        for host in (f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}", "LOCALHOST.", "localhost"):
+            self.assertEqual(self.raw("GET", "/logs", {"Host": host})[0], 200, host)
+
+    def test_allowed_hosts_lets_a_named_host_in(self):
+        port = self.srv.server_address[1]
+        app.CFG["allowed_hosts"] = "mc.example.lan, kpanel.tail1234.ts.net:443"
+        self.addCleanup(app.CFG.update, allowed_hosts="")
+        self.assertEqual(self.raw("GET", "/logs", {"Host": f"MC.example.lan:{port}"})[0], 200)
+        self.assertEqual(self.raw("GET", "/logs", {"Host": "kpanel.tail1234.ts.net"})[0], 200)
+        self.assertEqual(self.raw("GET", "/logs", {"Host": "evil.ts.net"})[0], 403)
+
+    def test_allowed_hosts_star_answers_any_name(self):
+        app.CFG["allowed_hosts"] = "*"
+        self.addCleanup(app.CFG.update, allowed_hosts="")
+        self.assertEqual(self.raw("GET", "/logs", {"Host": "anything.example"})[0], 200)
+
+    def test_a_missing_host_header_is_refused(self):
+        self.assertEqual(self.raw("GET", "/logs", {})[0], 403)
+
+    def test_with_a_login_any_host_name_is_fine_unless_narrowed(self):
+        """Rebinding gets no credentials (the browser keeps them per origin), so a
+        reverse proxy with its own domain keeps working."""
+        self.assertTrue(app.host_allowed("panel.example.com", allowed="", login=True))
+        self.assertFalse(app.host_allowed("panel.example.com", allowed="other.example", login=True))
+        self.assertFalse(app.host_allowed("panel.example.com", allowed="", login=False))
+
+    def test_a_host_no_browser_sends_is_refused_in_every_mode(self):
+        """N-08: host_name split at the first ':', so 'localhost:8080@evil.example'
+        counted as localhost."""
+        bad = ("localhost:8080@evil.example", "localhost/evil", "localhost\\evil",
+               "local host", "localhost\tx", "localhost\x00")
+        for host in bad:
+            self.assertEqual(app.host_name(host), "", host)
+            for login, allowed in ((False, ""), (True, ""), (False, "*"), (True, "localhost")):
+                self.assertFalse(app.host_allowed(host, allowed=allowed, login=login), (host, login, allowed))
+        self.assertEqual(self.raw("GET", "/", {"Host": "localhost:8080@evil.example"})[0], 403)
+        self.assertEqual(self.raw("GET", "/", {"Host": "localhost:8080"})[0], 200)
+
+    def test_the_server_header_names_no_versions(self):
+        """N-09: it said 'kPanel Python/3.13.x'."""
+        for path in ("/", "/healthz", "/nowhere"):
+            c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=5)
+            c.request("GET", path, headers={"Host": "localhost"})
+            r = c.getresponse()
+            r.read()
+            c.close()
+            self.assertEqual(r.getheader("Server"), "kPanel", path)
+
+    def test_healthz_answers_any_host(self):
+        self.assertEqual(self.raw("GET", "/healthz", {"Host": "kpanel:8080"}), (200, "ok"))
+
+    def test_host_name_normalisation(self):
+        self.assertEqual(app.host_name("Example.COM.:8080"), "example.com")
+        self.assertEqual(app.host_name("[::1]:8080"), "[::1]")
+        self.assertEqual(app.host_name("::1"), "[::1]")
+        self.assertEqual(app.host_name("[::1"), "")
+        self.assertEqual(app.host_name(None), "")
+
+    def test_post_without_fetch_metadata_is_judged_by_origin(self):
+        """Safari before 16.4 sends no Sec-Fetch-Site: fall back to Origin, then Referer."""
+        here = self.here()
+        form = {"action": "op", "name": "Mallory"}
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Origin": "http://evil.example"}, form)[0], 403)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Origin": "null"}, form)[0], 403)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Referer": "http://evil.example/x"}, form)[0], 403)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here}, form)[0], 403)  # none of the three
+        self.assertEqual(FakeMinecraft.sent, [])
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Origin": f"http://{here}"}, form)[0], 200)
+        self.assertEqual(self.raw("POST", "/players", {"Host": here, "Referer": f"http://{here}/players"},
+                                  {"action": "deop", "name": "Mallory"})[0], 200)
+
+    def test_a_foreign_origin_is_refused_even_with_same_origin_fetch_metadata(self):
+        here = self.here()
+        status, _ = self.raw("POST", "/players", {"Host": here, "Sec-Fetch-Site": "same-origin",
+                                                  "Origin": "http://evil.example"}, {"action": "op", "name": "Mallory"})
+        self.assertEqual(status, 403)
+        self.assertEqual(FakeMinecraft.sent, [])
+
+    # --- request limits and headers -------------------------------------------------
+
+    def test_pages_carry_a_csp_that_allows_exactly_the_panels_own_script(self):
+        with urllib.request.urlopen(self.url + "/players") as r:
+            csp, nosniff, body = r.headers["Content-Security-Policy"], r.headers["X-Content-Type-Options"], r.read().decode()
+        self.assertEqual(nosniff, "nosniff")
+        scripts = re.findall(r"<script>(.*?)</script>", body, re.S)
+        self.assertEqual(len(scripts), 1)  # one inline script, the one the hash pins
+        digest = base64.b64encode(__import__("hashlib").sha256(scripts[0].encode()).digest()).decode()
+        self.assertIn(f"script-src 'sha256-{digest}'", csp)
+        self.assertIn("default-src 'none'", csp)
+        self.assertIn("form-action 'self'", csp)
+
+    def test_a_negative_content_length_is_refused_at_once(self):
+        """rfile.read(-1) used to block the worker thread until the client hung up."""
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=3)
+        c.putrequest("POST", "/players")
+        c.putheader("Sec-Fetch-Site", "same-origin")
+        c.putheader("Content-Length", "-1")
+        c.endheaders()
+        self.assertEqual(c.getresponse().status, 400)
+        c.close()
+
+    def test_an_oversized_form_is_refused_unread(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=3)
+        c.putrequest("POST", "/players")
+        c.putheader("Sec-Fetch-Site", "same-origin")
+        c.putheader("Content-Length", str(app.MAX_FORM + 1))
+        c.endheaders()
+        self.assertEqual(c.getresponse().status, 413)
+        c.close()
+        self.assertEqual(FakeMinecraft.sent, [])
+
+    def test_a_stalled_client_is_dropped(self):
+        self.assertTrue(0 < app.Handler.timeout <= 60)
+
+    def test_player_counts_from_the_ping_are_numbers(self):
+        self.assertEqual(app._int("<script>"), 0)
+        self.assertEqual(app._int(None), 0)
+        self.assertEqual(app._int("7"), 7)
+
+    def test_other_containers_of_the_stack_are_refused(self):
+        """N-05: from mc, http://kpanel:8080 with Host: localhost was the full
+        panel without a login. Sibling services are refused by address."""
+        stack = {"mc,mc-backup,filebrowser": frozenset({"10.89.0.2", "10.89.0.3"})}
+        resolve = lambda names: stack.get(names, frozenset())
+        refuse = "mc,mc-backup,filebrowser"
+        self.assertFalse(app.peer_allowed("10.89.0.2", refuse, "", resolve))      # mc
+        self.assertTrue(app.peer_allowed("10.89.0.1", refuse, "", resolve))       # the published port's gateway
+        self.assertTrue(app.peer_allowed("192.168.1.20", refuse, "", resolve))    # a LAN client, no userland proxy
+        self.assertTrue(app.peer_allowed("127.0.0.1", refuse, "", resolve))       # the healthcheck
+        self.assertTrue(app.peer_allowed("10.89.0.2", "", "", resolve))           # nothing configured
+
+    def test_behind_tailscale_only_the_sidecar_is_answered(self):
+        resolve = lambda names: frozenset({"10.89.0.9"}) if names == "tailscale" else frozenset()
+        self.assertTrue(app.peer_allowed("10.89.0.9", "mc", "tailscale", resolve))
+        self.assertFalse(app.peer_allowed("10.89.0.2", "mc", "tailscale", resolve))
+        self.assertFalse(app.peer_allowed("10.89.0.1", "mc", "tailscale", resolve))  # not published there
+        self.assertTrue(app.peer_allowed("127.0.0.1", "mc", "tailscale", resolve))
+        # the sidecar not resolvable (restarting): nobody, rather than everybody
+        self.assertFalse(app.peer_allowed("10.89.0.9", "", "tailscale", lambda n: frozenset()))
+
+    def test_a_refused_peer_gets_a_403_before_anything_else(self):
+        asked = []
+
+        def refuse(addr):
+            asked.append(addr)
+            return False
+        from unittest import mock
+        with mock.patch.object(app, "peer_allowed", refuse):
+            status, body = self.get_raw("/", {"Host": "evil.example"})  # peer before Host
+            self.assertEqual(status, 403)
+            self.assertIn("other containers", body)
+            status, _ = self.post("/players", {"action": "op", "name": "Attacker2"},
+                                  {"Sec-Fetch-Site": "same-origin"})
+            self.assertEqual(status, 403)
+        self.assertEqual(asked[0], "127.0.0.1")  # it is the TCP peer that is judged
+
+    def test_service_names_resolve_and_unknown_names_add_nothing(self):
+        app._peer_cache.clear()
+        self.addCleanup(app._peer_cache.clear)
+        self.assertIn("127.0.0.1", app.resolve_peers("localhost, no-such-service.invalid"))
+        self.assertEqual(app.resolve_peers("no-such-service.invalid"), frozenset())
+
+    def test_the_tailscale_login_header_is_ignored_unless_trusted(self):
+        """Outside tailscale.yml any client can send it: it must not name anyone."""
+        self.assertEqual(app.who_from({"Tailscale-User-Login": "admin@example.com"}), "")
+        app.CFG["trust_ts_headers"] = True
+        self.addCleanup(app.CFG.update, trust_ts_headers=False)
+        self.assertEqual(app.who_from({"Tailscale-User-Login": "me@example.com"}), "me@example.com")
+        for crafted in ("x\n| injected | row |", "a b", "[click](http://evil)", "x" * 101):
+            self.assertEqual(app.who_from({"Tailscale-User-Login": crafted}), "", crafted)
+
+    # N-01: the boundary against the server is the uid, proved by
+    # tests/integration/plugin_isolation.sh against a running stack. Here: the
+    # panel warns when it runs as the server files' owner.
+    def test_the_panel_notices_when_it_shares_the_server_uid(self):
+        with tempfile.NamedTemporaryFile() as f:
+            owner = os.stat(f.name).st_uid
+            self.assertTrue(app.shares_server_uid(f.name, uid=owner))
+            self.assertFalse(app.shares_server_uid(f.name, uid=owner + 1))
+        self.assertFalse(app.shares_server_uid("/nonexistent/server.properties", uid=0))
+
     def test_basic_auth_challenges_when_credentials_are_missing(self):
         app.CFG["basic_auth"] = "admin:hunter2"
         try:
@@ -450,6 +712,35 @@ class App(unittest.TestCase):
             self.assertEqual(status, 401)
         finally:
             app.CFG["basic_auth"] = ""
+
+    def with_hashed_login(self, password="correct horse battery"):
+        saved = dict(app.CFG)
+        app.CFG.update(user="admin", password_hash=app.auth.hash_password(password), basic_auth="")
+        self.addCleanup(lambda: app.CFG.update(saved))
+        return {"Authorization": "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()}
+
+    def test_a_hashed_login_challenges_then_lets_the_right_password_in(self):
+        good = self.with_hashed_login()
+        self.assertEqual(self.get_raw("/players")[0], 401)
+        status, body = self.get_raw("/players", good)
+        self.assertEqual(status, 200)
+        self.assertNotIn("plain text", body)  # no deprecation banner with a hash
+
+    def test_repeated_wrong_passwords_get_429_with_retry_after(self):
+        self.with_hashed_login()
+        bad = {"Authorization": "Basic " + base64.b64encode(b"admin:guess").decode()}
+        codes = [self.get_raw("/players", bad)[0] for _ in range(app.auth.FREE_FAILURES + 1)]
+        self.assertEqual(codes[:-1], [401] * app.auth.FREE_FAILURES)
+        self.assertEqual(codes[-1], 429)
+
+    def test_the_plaintext_login_still_works_but_every_page_says_to_migrate(self):
+        app.CFG["basic_auth"] = "admin:hunter2-is-long"
+        self.addCleanup(app.CFG.update, basic_auth="")
+        status, body = self.get_raw("/players", {"Authorization": "Basic " + base64.b64encode(
+            b"admin:hunter2-is-long").decode()})
+        self.assertEqual(status, 200)
+        self.assertIn("stored in plain text (KPANEL_BASIC_AUTH)", body)
+        self.assertIn("docker compose run --rm --build hashpw", body)
 
     def test_healthz_stays_reachable_for_the_container_healthcheck(self):
         app.CFG["basic_auth"] = "admin:hunter2"

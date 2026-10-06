@@ -1,0 +1,10 @@
+# Test-only overlay for plugin_isolation.sh: nothing published (no clash with
+# a running kPanel), no update check (no network from the panel). The markers
+# come in through --env-file.
+services:
+  mc:
+    ports: !reset []
+  kpanel:
+    ports: !reset []
+    environment:
+      KPANEL_UPDATE_CHECK: "0"
