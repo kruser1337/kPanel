@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.4.0 — service accounts; no plain-text password
+
+Follows up on a review of 0.3.0: two things 0.3 left half-done, and scans
+that now run on every change. **Please update**, and read *Upgrading* first if
+you use `compose/lan.yml` or a compose file of your own:
+
+```sh
+git pull && docker compose up -d --build
+```
+
+### Changed
+
+- **Every service runs as a service account, not as uid 1000.** Docker
+  doesn't remap users by default, so a container's uid is the same number on
+  the host, and on most Linux machines 1000 is the first person's login: a
+  process breaking out of the server's container would have been that person.
+  The server, the backups and the file manager now run as uid 10000, the panel
+  as 10001 in group 10000 (`kpanel/owners.py` has the ids, and a test keeps
+  every file in line with it). A new one-shot service, `volume-init`, hands
+  the volumes to those users before anything else starts, on every `up`, so
+  older installs and restored backups are converted by themselves. It is root
+  for a few seconds, runs only that conversion, has no network, and holds two
+  capabilities: `CHOWN`, and `DAC_READ_SEARCH` to read through directories it
+  doesn't own. The backup scheduler gives up its `CHOWN` to it. (Still root,
+  as before: the backup scheduler, which the image requires, and the server's
+  entrypoint until it drops to 10000.)
+- **`KPANEL_BASIC_AUTH`, the plain-text password, is refused**, as 0.3
+  announced. The panel doesn't start while it is set, not even next to
+  `KPANEL_PASSWORD_HASH`: the password would still sit in `.env` and in the
+  container's environment. The log says how to replace it. The panel's only
+  login is now the argon2id hash; the code that compared a typed password with
+  a stored clear-text one is gone.
+- **Security scans in CI.** bandit (the panel's code), pip-audit (its pinned
+  dependencies) and hadolint (its Dockerfile) run on every pull request and
+  weekly; see *Scans* in the README. Six findings were reviewed and judged
+  harmless; each is marked `# nosec` with the reason next to it.
+
+### Upgrading
+
+- **`KPANEL_BASIC_AUTH` still in `.env`?** The panel won't start (the server
+  and backups run on). `docker compose logs kpanel` says so. Then:
+  1. `docker compose run --rm --build hashpw`
+  2. In `.env`, replace the `KPANEL_BASIC_AUTH=…` line with the line it prints,
+     **including its single quotes**.
+  3. `docker compose -f docker-compose.yml -f compose/lan.yml up -d`
+- **Everyone:** the first start re-owns every file in the volumes;
+  `docker compose logs volume-init` says how many it changed. Every later
+  start reads through the volumes again without changing anything, which for
+  a big world adds a moment to each start. `docker compose ps -a` lists
+  `volume-init` as *Exited (0)*: that is how it should look. If you ran commands in the server
+  as `-u 1000`, use `-u 10000` now.
+- **Coolify, or any compose file you built by hand: carry the changes over in
+  the same step as the new image.** The new panel image runs as 10001 in group
+  10000, and without the rest it can't read the server's files. From the new
+  `docker-compose.yml`, copy:
+  - the `volume-init` service, with its `restart: "no"` (Coolify would
+    otherwise restart it forever), and the `depends_on: volume-init` blocks of
+    `mc`, `mc-backup`, `filebrowser` and `kpanel`;
+  - `UID` and `GID` under `mc`'s `environment`;
+  - `mc-backup`'s `cap_add` (no `CHOWN`), `CRON_BACKUP_UID: "10000"`, and the
+    removal of its `entrypoint:`;
+  - `filebrowser`'s `user:`, its `environment:` (`FILEBROWSER_CONFIG`) and the
+    `cacheDir:` line of its config;
+  - the volumes written in the long form with `nocopy`, exactly as they are
+    (same `source:` keys; see [`docs/coolify.md`](docs/coolify.md)).
+
 ## 0.3.0 — security release
 
 A security audit of the panel, prompted by reports from users, found that the

@@ -10,6 +10,8 @@ import unittest
 
 import yaml
 
+import owners
+
 ROOT = pathlib.Path(__file__).parent.parent
 
 
@@ -41,7 +43,9 @@ class Base(unittest.TestCase):
     def test_every_variable_is_documented(self):
         used = set(VAR.findall(BASE_TEXT))
         documented = {l.split("=")[0].lstrip("# ") for l in ENV_EXAMPLE.splitlines() if "=" in l}
-        self.assertEqual(used - documented, set())
+        # Passed on only to be refused (0.4); .env.example says so, but not as a setting.
+        self.assertIn("KPANEL_BASIC_AUTH, the plain-text password up to 0.3, is refused", ENV_EXAMPLE)
+        self.assertEqual(used - documented - {"KPANEL_BASIC_AUTH"}, set())
 
     def test_the_server_generates_its_own_rcon_password(self):
         """itzg generates one only while RCON_PASSWORD is unset; set to "" it is empty."""
@@ -66,6 +70,15 @@ class Base(unittest.TestCase):
         config = yaml.safe_load(script.split("<<'EOF'\n", 1)[1].split("\nEOF", 1)[0])
         self.assertEqual(config["server"]["baseURL"], "/files/")
         self.assertTrue(config["auth"]["methods"]["noauth"])
+
+    def test_the_file_manager_is_pointed_at_the_config_it_writes(self):
+        """With its data volume nocopy (empty when fresh), FileBrowser exits if
+        FILEBROWSER_CONFIG, the image's path into that volume, names no file."""
+        fb = BASE["services"]["filebrowser"]
+        script = fb["entrypoint"][2]
+        self.assertIn("cat > /tmp/config.yaml <<'EOF'", script)
+        self.assertIn("exec ./filebrowser -c /tmp/config.yaml", script)
+        self.assertEqual(fb["environment"]["FILEBROWSER_CONFIG"], "/tmp/config.yaml")
 
     def test_the_file_manager_config_is_not_templated(self):
         """F-05: a value expanded into YAML by the shell can break or rewrite it.
@@ -128,10 +141,10 @@ class Base(unittest.TestCase):
         must stay root (the image requires it); the backups themselves don't."""
         b = BASE["services"]["mc-backup"]
         self.assertEqual(b["cap_drop"], ["ALL"])
-        self.assertEqual(sorted(b["cap_add"]), ["CHOWN", "SETGID", "SETUID"])
-        self.assertEqual(b["environment"]["CRON_BACKUP_UID"], "1000")
-        self.assertIn("chown 1000:1000 /backups", b["entrypoint"][-1])
-        self.assertIn("mc-data:/data:ro", b["volumes"])
+        self.assertEqual(sorted(b["cap_add"]), ["SETGID", "SETUID"])  # CHOWN moved to volume-init
+        self.assertNotIn("entrypoint", b)
+        data = next(v for v in b["volumes"] if isinstance(v, dict) and v["target"] == "/data")
+        self.assertEqual((data["source"], data["read_only"]), ("mc-data", True))
 
     def test_every_image_is_pinned(self):
         """No implicit :latest: an upstream push must not change a running stack."""
@@ -164,9 +177,61 @@ class Base(unittest.TestCase):
         """N-01: it shares the server's PID namespace, so a shared uid would let
         a plugin read every panel process's environment."""
         dockerfile = (ROOT / "kpanel" / "Dockerfile").read_text()
-        self.assertIn("USER 1001:1000", dockerfile)
-        self.assertNotIn("user", BASE["services"]["kpanel"])  # no override back to 1000
+        self.assertIn("USER %d:%d" % owners.PANEL, dockerfile)
+        self.assertNotEqual(owners.PANEL[0], owners.SERVER[0])
+        self.assertNotIn("user", BASE["services"]["kpanel"])  # no override back to the server's
         self.assertIn("kpanel-state:/var/lib/kpanel", BASE["services"]["kpanel"]["volumes"])
+
+    def test_every_service_runs_as_its_service_account(self):
+        """Up to 0.3 the server, backups and file manager ran as 1000, the first
+        login on most hosts (a container's uid is the host's). The ids are
+        owners.py's, everywhere: one that drifts locks a service out of its files."""
+        svc = BASE["services"]
+        server = "%d:%d" % owners.SERVER
+        self.assertEqual((svc["mc"]["environment"]["UID"], svc["mc"]["environment"]["GID"]),
+                         tuple(map(str, owners.SERVER)))
+        self.assertEqual(svc["mc-backup"]["environment"]["CRON_BACKUP_UID"], str(owners.SERVER[0]))
+        self.assertEqual(svc["filebrowser"]["user"], server)
+        dockerfile = (ROOT / "kpanel" / "Dockerfile").read_text()
+        self.assertIn("addgroup -g %d mc && adduser -D -u %d -G mc admin" % (owners.GROUP, owners.PANEL[0]),
+                      dockerfile)
+        self.assertIn("chown %d:%d /var/lib/kpanel" % owners.PANEL, dockerfile)
+        ids = {owners.GROUP, *owners.SERVER, *owners.PANEL}
+        self.assertFalse(ids & {0, 1000, 1001}, ids)
+
+    def test_volume_init_owns_every_volume(self):
+        """Each named volume is handed over before the services that use it
+        start. /data too: the itzg image's own re-owning leaves group 1000."""
+        init = BASE["services"]["volume-init"]
+        mounts = dict(v.split(":", 1)[::-1] for v in init["volumes"])
+        self.assertEqual(set(mounts), set(owners.VOLUMES))
+        self.assertEqual(set(mounts.values()), set(BASE["volumes"]))
+        for name in ("mc", "mc-backup", "filebrowser", "kpanel"):
+            self.assertEqual(BASE["services"][name]["depends_on"]["volume-init"]["condition"],
+                             "service_completed_successfully", name)
+
+    def test_volume_init_is_root_with_as_little_as_possible(self):
+        init = BASE["services"]["volume-init"]
+        self.assertEqual(init["user"], "0:0")
+        self.assertEqual(init["network_mode"], "none")
+        self.assertTrue(init["read_only"])
+        self.assertEqual(init["cap_drop"], ["ALL"])
+        self.assertEqual(sorted(init["cap_add"]), ["CHOWN", "DAC_READ_SEARCH"])
+        # A one-shot. Spelled out: Coolify gives a service without restart: its
+        # own default, unless-stopped, and so ran this in a loop.
+        self.assertEqual(init["restart"], "no")
+
+    def test_fresh_volumes_keep_the_owner_volume_init_gave_them(self):
+        """Docker copies an image directory's owner onto an empty volume mounted
+        over it: 1000 and 0750 for itzg's /data, root for mc-backup's /data and
+        /backups, 1000 for FileBrowser's data. A fresh install came up with a
+        /data the panel couldn't enter. Every mount where the image has the
+        directory; the panel's and FileBrowser's images have no /data."""
+        for name, target in (("mc", "/data"), ("mc-backup", "/data"), ("mc-backup", "/backups"),
+                             ("filebrowser", "/home/filebrowser/data")):
+            mount = next(v for v in BASE["services"][name]["volumes"]
+                         if isinstance(v, dict) and v["target"] == target)
+            self.assertEqual(mount["volume"], {"nocopy": True}, name)
 
 
     def test_only_the_panel_can_reach_the_file_manager(self):
@@ -181,7 +246,8 @@ class Base(unittest.TestCase):
     def test_the_panel_refuses_every_sibling_service(self):
         """N-05: each other long-running service of the stack is named."""
         refused = set(BASE["services"]["kpanel"]["environment"]["KPANEL_REFUSE_PEERS"].split(","))
-        siblings = {n for n, svc in BASE["services"].items() if n != "kpanel" and not svc.get("profiles")}
+        siblings = {n for n, svc in BASE["services"].items() if n != "kpanel" and not svc.get("profiles")
+                    and svc.get("network_mode") != "none"}
         self.assertEqual(refused, siblings)
 
 
@@ -195,7 +261,7 @@ class Image(unittest.TestCase):
         copy = dockerfile.split("COPY app.py", 1)[1].split("./\n", 1)[0]
         copied = {"app.py"} | set(copy.replace("\\", " ").split())
         local = {f.stem for f in here.glob("*.py")}
-        todo, seen = ["app.py", "hashpw.py"], set()
+        todo, seen = ["app.py", "hashpw.py", "owners.py"], set()
         while todo:
             name = todo.pop()
             if name in seen:

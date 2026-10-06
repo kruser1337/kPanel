@@ -144,7 +144,7 @@ class App(unittest.TestCase):
         # lean on a hardcoded default that no longer exists.
         app.CFG.update(token="t", repo="example/kpanel", props=cls.tmp.name,
                        files_url="https://files.example:8443/",
-                       data=str(cls.data), rcon_password="pw", basic_auth="")
+                       data=str(cls.data), rcon_password="pw", password_hash="")
         backups = cls.data / "backups"
         backups.mkdir()
         (backups / "world-20261001-120000.tar.gz").write_bytes(b"x" * 2048)
@@ -393,8 +393,9 @@ class App(unittest.TestCase):
         self.assertEqual(FakeGitHub.opened, [])
 
     def test_file_mode_writes_in_place_without_needing_a_writable_directory(self):
-        """N-01: the panel is uid 1001 in group 1000, and /data is 0750: only the
-        file's own group write bit is there, so no temp file and rename."""
+        """N-01: the panel is uid 10001 in the server's group 10000, and can't
+        write /data itself: only the file's own group write bit is there, so no
+        temp file and rename."""
         props = self.file_mode()
         inode = props.stat().st_ino
         os.chmod(props.parent, 0o500)  # the directory can't take a new entry
@@ -693,29 +694,9 @@ class App(unittest.TestCase):
             self.assertFalse(app.shares_server_uid(f.name, uid=owner + 1))
         self.assertFalse(app.shares_server_uid("/nonexistent/server.properties", uid=0))
 
-    def test_basic_auth_challenges_when_credentials_are_missing(self):
-        app.CFG["basic_auth"] = "admin:hunter2"
-        try:
-            status, _ = self.get_raw("/")
-            self.assertEqual(status, 401)
-        finally:
-            app.CFG["basic_auth"] = ""
-
-    def test_basic_auth_accepts_the_right_credentials(self):
-        app.CFG["basic_auth"] = "admin:hunter2"
-        try:
-            token = base64.b64encode(b"admin:hunter2").decode()
-            status, _ = self.get_raw("/", {"Authorization": f"Basic {token}"})
-            self.assertEqual(status, 200)
-            bad = base64.b64encode(b"admin:wrong").decode()
-            status, _ = self.get_raw("/", {"Authorization": f"Basic {bad}"})
-            self.assertEqual(status, 401)
-        finally:
-            app.CFG["basic_auth"] = ""
-
     def with_hashed_login(self, password="correct horse battery"):
         saved = dict(app.CFG)
-        app.CFG.update(user="admin", password_hash=app.auth.hash_password(password), basic_auth="")
+        app.CFG.update(user="admin", password_hash=app.auth.hash_password(password))
         self.addCleanup(lambda: app.CFG.update(saved))
         return {"Authorization": "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()}
 
@@ -724,7 +705,8 @@ class App(unittest.TestCase):
         self.assertEqual(self.get_raw("/players")[0], 401)
         status, body = self.get_raw("/players", good)
         self.assertEqual(status, 200)
-        self.assertNotIn("plain text", body)  # no deprecation banner with a hash
+        wrong = {"Authorization": "Basic " + base64.b64encode(b"admin:wrong").decode()}
+        self.assertEqual(self.get_raw("/", wrong)[0], 401)
 
     def test_repeated_wrong_passwords_get_429_with_retry_after(self):
         self.with_hashed_login()
@@ -733,31 +715,19 @@ class App(unittest.TestCase):
         self.assertEqual(codes[:-1], [401] * app.auth.FREE_FAILURES)
         self.assertEqual(codes[-1], 429)
 
-    def test_the_plaintext_login_still_works_but_every_page_says_to_migrate(self):
-        app.CFG["basic_auth"] = "admin:hunter2-is-long"
-        self.addCleanup(app.CFG.update, basic_auth="")
-        status, body = self.get_raw("/players", {"Authorization": "Basic " + base64.b64encode(
-            b"admin:hunter2-is-long").decode()})
-        self.assertEqual(status, 200)
-        self.assertIn("stored in plain text (KPANEL_BASIC_AUTH)", body)
-        self.assertIn("docker compose run --rm --build hashpw", body)
-
     def test_healthz_stays_reachable_for_the_container_healthcheck(self):
-        app.CFG["basic_auth"] = "admin:hunter2"
-        try:
-            status, body = self.get_raw("/healthz")
-            self.assertEqual(status, 200)
-            self.assertEqual(body, "ok")
-        finally:
-            app.CFG["basic_auth"] = ""
+        self.with_hashed_login()
+        status, body = self.get_raw("/healthz")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "ok")
 
     def test_startup_refuses_a_panel_with_no_auth_boundary(self):
         with self.assertRaises(SystemExit):
-            app.require_auth_boundary(basic_auth="", allow_no_auth="")
+            app.require_auth_boundary(login_configured=False, allow_no_auth="")
 
     def test_startup_accepts_an_explicit_no_auth_opt_in(self):
-        app.require_auth_boundary(basic_auth="", allow_no_auth="1")
-        app.require_auth_boundary(basic_auth="admin:hunter2", allow_no_auth="")
+        app.require_auth_boundary(login_configured=False, allow_no_auth="1")
+        app.require_auth_boundary(login_configured=True, allow_no_auth="")
 
     def test_a_crafted_server_icon_cannot_break_out_of_the_img_tag(self):
         """The favicon comes off the wire from the pinged server, into src="...".

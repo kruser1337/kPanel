@@ -5,7 +5,7 @@
 #   tests/integration/stack_peers.sh
 #
 # Part 1, the base file (no login): from this machine the panel answers; from
-# mc (as uid 1000, a plugin's view) and from mc-backup, http://kpanel:8080 with
+# mc (as uid 10000, a plugin's view) and from mc-backup, http://kpanel:8080 with
 # a forged Host and Sec-Fetch-Site is refused, an op over it changes nothing,
 # and http://filebrowser:80 isn't reachable at all.
 # Part 2, the tailscale.yml rule (KPANEL_ONLY_PEERS=tailscale) with a stand-in
@@ -75,18 +75,18 @@ for _ in $(seq 100); do "${DC[@]}" exec -T mc test -f /data/ops.json 2>/dev/null
   { echo "FAIL: the server never started (no ops.json); see: ${DC[*]} logs mc" >&2; exit 1; }
 ops_before=$("${DC[@]}" exec -T mc cat /data/ops.json 2>/dev/null | tr -d '\r' || true)
 check "$([[ $(from_host /) == 200 ]] && echo 1 || echo 0)" "this machine, through the published port: 200"
-s=$(from mc 1000:1000 https://api.papermc.io/)
+s=$(from mc 10000:10000 https://api.papermc.io/)
 check "$([[ $s != 000 ]] && echo 1 || echo 0)" "mc still reaches the internet (Paper, Mojang): $s"
-s=$(from mc 1000:1000 "${FORGED[@]}" http://kpanel:8080/)
-check "$([[ $s == 403 ]] && echo 1 || echo 0)" "mc (uid 1000) -> kpanel:8080 with a forged Host: $s"
-s=$(from mc 1000:1000 "${FORGED[@]}" --data 'action=op&name=Attacker2' http://kpanel:8080/players)
+s=$(from mc 10000:10000 "${FORGED[@]}" http://kpanel:8080/)
+check "$([[ $s == 403 ]] && echo 1 || echo 0)" "mc (uid 10000) -> kpanel:8080 with a forged Host: $s"
+s=$(from mc 10000:10000 "${FORGED[@]}" --data 'action=op&name=Attacker2' http://kpanel:8080/players)
 check "$([[ $s == 403 ]] && echo 1 || echo 0)" "mc -> POST /players op Attacker2: $s"
 sleep 2
 ops_after=$("${DC[@]}" exec -T mc cat /data/ops.json 2>/dev/null | tr -d '\r' || true)
 check "$([[ $ops_before == "$ops_after" && $ops_after != *Attacker2* ]] && echo 1 || echo 0)" "ops.json unchanged"
 s=$(from mc-backup 0 "${FORGED[@]}" http://kpanel:8080/)
 check "$([[ $s == 403 ]] && echo 1 || echo 0)" "mc-backup -> kpanel:8080: $s"
-s=$(from mc 1000:1000 http://filebrowser:80/files/)
+s=$(from mc 10000:10000 http://filebrowser:80/files/)
 check "$([[ $s == 000 ]] && echo 1 || echo 0)" "mc -> filebrowser:80 is unreachable: ${s:-000}"
 s=$(from_host /files/)
 check "$([[ $s == 200 ]] && echo 1 || echo 0)" "the file manager through the panel still works: $s"
@@ -98,7 +98,7 @@ wait_panel || { echo "FAIL: the panel never answered" >&2; exit 1; }
 "${DC[@]}" ${EXTRA[@]+"${EXTRA[@]}"} exec -T tailscale apk add -q curl >/dev/null 2>&1 || true
 s=$(from tailscale 0 "${FORGED[@]}" http://kpanel:8080/)
 check "$([[ $s == 200 ]] && echo 1 || echo 0)" "the sidecar -> kpanel:8080: $s"
-s=$(from mc 1000:1000 "${FORGED[@]}" http://kpanel:8080/)
+s=$(from mc 10000:10000 "${FORGED[@]}" http://kpanel:8080/)
 check "$([[ $s == 403 ]] && echo 1 || echo 0)" "mc -> kpanel:8080: $s"
 s=$(from_host /)
 check "$([[ $s == 403 ]] && echo 1 || echo 0)" "the published port (there is none in tailscale.yml): $s"

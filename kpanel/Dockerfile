@@ -9,19 +9,21 @@ RUN pip install --no-cache-dir --only-binary=argon2-cffi-bindings,cffi -r /tmp/r
 WORKDIR /app
 # The root filesystem is read-only at run time (compose), so no .pyc files.
 ENV PYTHONDONTWRITEBYTECODE=1
-COPY app.py auth.py hashpw.py compose_edit.py filesproxy.py gamerules.py github.py history.py procstats.py rcon.py release.py settings.py ui.py \
+COPY app.py auth.py hashpw.py compose_edit.py filesproxy.py gamerules.py github.py history.py owners.py procstats.py rcon.py release.py settings.py ui.py \
      properties_meta.json gamerules_meta.json paper-logo.png favicon.png favicon.LICENSE.txt ui.LICENSE.txt ./
 
-# uid 1001 in group 1000. The server (itzg) runs as 1000:1000 and the panel shares
-# its process namespace for the CPU and memory graphs: a different uid means no
-# server process, plugins included, can read any panel process's environment or
-# memory. Group 1000 lets the panel write server.properties (0664, the server's
-# default) and read the rest of /data.
-RUN addgroup -g 1000 mc && adduser -D -u 1001 -G mc admin
+# A service account: uid 10001 in group 10000 (owners.PANEL), not 1000, which on
+# most hosts is the first person's login. The server (itzg) runs as 10000:10000
+# and the panel shares its process namespace for the CPU and memory graphs: a
+# different uid means no server process, plugins included, can read any panel
+# process's environment or memory. The shared group lets the panel write
+# server.properties (0664, the server's default) and read the rest of /data.
+RUN addgroup -g 10000 mc && adduser -D -u 10001 -G mc admin
 # Dashboard history lives here (volume kpanel-state). Owned by the panel in the
-# image, so a fresh named volume mounted over it inherits that ownership.
-RUN mkdir -p /var/lib/kpanel && chown 1001:1000 /var/lib/kpanel
-USER 1001:1000
+# image, so a fresh named volume mounted over it inherits that ownership; the
+# volume-init service re-owns one made by an older version.
+RUN mkdir -p /var/lib/kpanel && chown 10001:10000 /var/lib/kpanel
+USER 10001:10000
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

@@ -57,6 +57,20 @@ carry its changes to `docker-compose.yml` over into `compose/coolify.yml` (image
   because the UUID and keys stay the same. (kPanel 0.3 itself replaces
   `kpanel-data` with `kpanel-state` on purpose: the panel's new user can't
   write the old volume. It holds only the dashboard graphs, which start over.)
+- **`volume-init` runs once per deploy and exits.** It hands the volumes to
+  the service accounts before the other services start, so it shows as
+  *Exited (0)*, which is right. Keep its `restart: "no"`: Coolify gives a
+  service without a `restart:` key `unless-stopped`, which would start it
+  again every time it exits. If your Coolify reports the app as degraded
+  because of the exited container, add `exclude_from_hc: true` to
+  `volume-init` in `compose/coolify.yml` (Coolify's key for one-shot services;
+  plain compose rejects it, so it isn't in `docker-compose.yml`). Each deploy
+  reads through every volume once, the world included.
+- **Some volumes are in the long form** (`type: volume`, `source:`,
+  `target:`, `volume: {nocopy: true}`). Copy them into `compose/coolify.yml`
+  as they are: without `nocopy`, a fresh volume gets the image's owner and the
+  panel can't read `/data`. The `source:` is the volume key, so the same
+  never-rename rule applies.
 - **The `hashpw` service** has a profile, so Coolify skips it, as it should:
   it is a one-off tool. Make the login hash in a local checkout with
   `docker compose run --rm --build hashpw`; the hash isn't tied to the host.

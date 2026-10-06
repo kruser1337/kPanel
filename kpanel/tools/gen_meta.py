@@ -27,7 +27,8 @@ DEFS = "https://raw.githubusercontent.com/itzg/docker-minecraft-server/master/fi
 
 
 def fetch(url):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
+    # Only called with WIKI and DEFS, literal https:// constants.
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:  # nosec B310
         return r.read().decode()
 
 

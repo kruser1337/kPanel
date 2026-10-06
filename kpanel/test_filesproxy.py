@@ -65,7 +65,7 @@ class FilesProxy(unittest.TestCase):
         threading.Thread(target=cls.fb.serve_forever, daemon=True).start()
         cls.saved = dict(app.CFG)
         app.CFG.update(files_upstream=f"http://127.0.0.1:{cls.fb.server_address[1]}", files_url="/files/",
-                       basic_auth="", password_hash="", allowed_hosts="")
+                       password_hash="", allowed_hosts="")
         cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         cls.port = cls.srv.server_address[1]
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()

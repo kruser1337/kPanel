@@ -21,5 +21,5 @@ services:
     environment:
       # Reachable from the network now, so "no login" is no longer an option:
       # with this cleared, the panel refuses to start without KPANEL_PASSWORD_HASH
-      # (or the deprecated KPANEL_BASIC_AUTH) in .env.
+      # in .env.
       KPANEL_ALLOW_NO_AUTH: ""

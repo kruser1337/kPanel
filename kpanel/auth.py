@@ -10,8 +10,8 @@ so a verified Authorization header is remembered for a while (by an HMAC under
 a key that never leaves this process) instead of re-hashing on every page, and
 at most two hashes are computed at once. Failed logins back off per client.
 
-KPANEL_BASIC_AUTH=user:password, the plaintext form, still works in 0.3 with a
-warning; 0.4 refuses it.
+KPANEL_BASIC_AUTH=user:password, the plaintext form 0.2 used, is refused since
+0.4 (see refuse_plaintext).
 """
 
 import base64
@@ -78,15 +78,10 @@ def parse_header(value: str):
 class Login:
     """One configured login. Build it once; check() is safe from many threads."""
 
-    def __init__(self, user="admin", password_hash="", plaintext=""):
+    # B107 flags the empty default: no hash means no login, not an empty password.
+    def __init__(self, user="admin", password_hash=""):  # nosec B107
         self.user = (user or "admin").encode()
         self.hash = password_hash.strip()
-        self.plaintext = None
-        if not self.hash and plaintext:
-            u, sep, pw = plaintext.partition(":")
-            if not sep:
-                raise LoginError("KPANEL_BASIC_AUTH must be user:password")
-            self.user, self.plaintext = u.encode(), pw.encode()
         self._key = secrets.token_bytes(32)
         self._ok = {}          # HMAC of a verified header -> expiry
         self._fails = collections.OrderedDict()  # client -> (failures, time of last), LRU
@@ -94,30 +89,22 @@ class Login:
         self._lock = threading.Lock()
 
     def configured(self) -> bool:
-        return bool(self.hash or self.plaintext)
-
-    @property
-    def deprecated(self) -> bool:
-        """The plaintext KPANEL_BASIC_AUTH is in use."""
-        return self.plaintext is not None
+        return bool(self.hash)
 
     def validate(self):
         """Raise LoginError for a login that can't work or that anyone could guess."""
-        if self.hash:
-            try:
-                extract_parameters(self.hash)
-            except exceptions.InvalidHashError:
-                raise LoginError(
-                    "KPANEL_PASSWORD_HASH is not an argon2 hash. In .env it must be in "
-                    "single quotes, exactly as hashpw.py prints it: without them, compose "
-                    "reads each $ in it as a variable.") from None
-            for example in EXAMPLE_PASSWORDS:
-                if self._verify_hash(example.encode()):
-                    raise LoginError("the password is the example from .env.example; choose your own")
-        elif self.plaintext is not None:
-            if self.plaintext.decode("utf-8", "replace") in EXAMPLE_PASSWORDS:
-                raise LoginError("KPANEL_BASIC_AUTH uses the example password from .env.example; "
-                                 "choose your own (and see hashpw.py)")
+        if not self.hash:
+            return
+        try:
+            extract_parameters(self.hash)
+        except exceptions.InvalidHashError:
+            raise LoginError(
+                "KPANEL_PASSWORD_HASH is not an argon2 hash. In .env it must be in "
+                "single quotes, exactly as hashpw.py prints it: without them, compose "
+                "reads each $ in it as a variable.") from None
+        for example in EXAMPLE_PASSWORDS:
+            if self._verify_hash(example.encode()):
+                raise LoginError("the password is the example from .env.example; choose your own")
 
     def retry_after(self, client: str) -> int:
         """Seconds this client must wait before its next attempt counts; 0 if none."""
@@ -157,9 +144,8 @@ class Login:
         return ok
 
     def _matches(self, user: bytes, password: bytes) -> bool:
-        user_ok = hmac.compare_digest(user, self.user)  # bytes: any input, no TypeError
-        if self.plaintext is not None:
-            return hmac.compare_digest(password, self.plaintext) and user_ok
+        # The user name isn't secret; compare_digest just takes bytes of any length.
+        user_ok = hmac.compare_digest(user, self.user)
         return self._verify_hash(password) and user_ok
 
     def _verify_hash(self, password: bytes) -> bool:
@@ -170,6 +156,20 @@ class Login:
                 return False
 
 
+def refuse_plaintext(env=os.environ):
+    """Raise LoginError while KPANEL_BASIC_AUTH, a password in plain text, is set.
+
+    0.3 still accepted it with a warning and promised 0.4 would refuse it. It
+    is refused even next to a hash: then the password still sits in .env and in
+    the container's environment (`docker inspect`), readable as it is.
+    """
+    if env.get("KPANEL_BASIC_AUTH", "").strip():
+        raise LoginError(
+            "KPANEL_BASIC_AUTH holds the panel password in plain text, which kPanel no "
+            "longer accepts. Run `docker compose run --rm --build hashpw`, put the "
+            "KPANEL_PASSWORD_HASH line it prints into .env, delete the KPANEL_BASIC_AUTH "
+            "line, and run `docker compose up -d` again.")
+
+
 def from_env(env=os.environ) -> Login:
-    return Login(env.get("KPANEL_USER", "admin"), env.get("KPANEL_PASSWORD_HASH", ""),
-                 env.get("KPANEL_BASIC_AUTH", ""))
+    return Login(env.get("KPANEL_USER", "admin"), env.get("KPANEL_PASSWORD_HASH", ""))

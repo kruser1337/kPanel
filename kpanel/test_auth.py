@@ -1,4 +1,4 @@
-"""The login: argon2id hashes, the verification cache, backoff, and the plaintext fallback."""
+"""The login: argon2id hashes, the verification cache, backoff, and refusing plain text."""
 
 import base64
 import io
@@ -44,10 +44,9 @@ class Hashing(unittest.TestCase):
     def test_non_ascii_passwords_work(self):
         """compare_digest on str raised TypeError for these: no such login could ever succeed."""
         pw = "pässwört-ünïcode-🔑"
-        self.assertTrue(auth.Login("admin", auth.hash_password(pw)).check(header("admin", pw)))
-        plain = auth.Login(plaintext=f"admin:{pw}")
-        self.assertTrue(plain.check(header("admin", pw)))
-        self.assertFalse(plain.check(header("admin", "pässwort"), "x"))  # and no exception
+        lg = auth.Login("admin", auth.hash_password(pw))
+        self.assertTrue(lg.check(header("admin", pw)))
+        self.assertFalse(lg.check(header("admin", "pässwort"), "x"))  # and no exception
 
     def test_a_verified_header_is_not_hashed_again(self):
         lg = auth.Login("admin", self.hash)
@@ -74,40 +73,46 @@ class Validation(unittest.TestCase):
             auth.Login("admin", mangled).validate()
 
     def test_the_example_passwords_are_refused(self):
-        with self.assertRaisesRegex(auth.LoginError, "example"):
-            auth.Login(plaintext="admin:change-me-to-something-long").validate()
         h = auth.HASHER.hash("change-me-to-something-long")  # made around hashpw's check
         with self.assertRaisesRegex(auth.LoginError, "example"):
             auth.Login("admin", h).validate()
 
     def test_a_good_login_validates(self):
         auth.Login("admin", auth.hash_password(PASSWORD)).validate()
-        auth.Login(plaintext="admin:" + PASSWORD).validate()
+        auth.Login().validate()  # no login: nothing to check
 
     def test_new_passwords_must_be_long_and_not_the_example(self):
         for bad in ("short", "change-me-too", "a-long-password"):
             with self.assertRaises(auth.LoginError):
                 auth.hash_password(bad)
 
-    def test_plaintext_must_have_a_colon(self):
-        with self.assertRaises(auth.LoginError):
-            auth.Login(plaintext="justapassword")
-
-    def test_the_hash_wins_over_the_plaintext(self):
-        lg = auth.Login("admin", auth.hash_password(PASSWORD), "admin:other-password-x")
-        self.assertFalse(lg.deprecated)
-        self.assertFalse(lg.check(header("admin", "other-password-x"), "z"))
+    def test_the_plaintext_login_is_refused(self):
+        """0.3 promised it: 0.4 doesn't start with KPANEL_BASIC_AUTH, not even next to a hash."""
+        for env in ({"KPANEL_BASIC_AUTH": "admin:" + PASSWORD},
+                    {"KPANEL_BASIC_AUTH": "admin:" + PASSWORD, "KPANEL_PASSWORD_HASH": auth.hash_password(PASSWORD)}):
+            with self.assertRaisesRegex(auth.LoginError, "hashpw"):
+                auth.refuse_plaintext(env)
+        auth.refuse_plaintext({"KPANEL_BASIC_AUTH": ""})  # what the compose file passes when unset
+        auth.refuse_plaintext({})
 
     def test_from_env(self):
-        lg = auth.from_env({"KPANEL_BASIC_AUTH": "boss:" + PASSWORD})
-        self.assertTrue(lg.deprecated)
+        lg = auth.from_env({"KPANEL_USER": "boss", "KPANEL_PASSWORD_HASH": auth.hash_password(PASSWORD),
+                            "KPANEL_BASIC_AUTH": "admin:other-password-x"})
         self.assertTrue(lg.check(header("boss", PASSWORD)))
+        self.assertFalse(lg.check(header("admin", "other-password-x"), "z"))  # never a login
         self.assertFalse(auth.from_env({}).configured())
+        self.assertFalse(auth.from_env({"KPANEL_BASIC_AUTH": "admin:" + PASSWORD}).configured())
 
 
 class Backoff(unittest.TestCase):
     def setUp(self):
-        self.lg = auth.Login(plaintext="admin:" + PASSWORD)
+        # These make thousands of failed checks: the same argon2id code, at a cost
+        # that takes microseconds instead of the real profile's tens of milliseconds.
+        cheap = auth.PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+        hasher = mock.patch.object(auth, "HASHER", cheap)
+        hasher.start()
+        self.addCleanup(hasher.stop)
+        self.lg = auth.Login("admin", cheap.hash(PASSWORD))
         self.clock = 1000.0
         patcher = mock.patch.object(auth.time, "monotonic", lambda: self.clock)
         patcher.start()

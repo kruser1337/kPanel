@@ -1,0 +1,35 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly too: a vulnerability published against a pinned dependency shows up
+  # without anyone touching the code.
+  schedule:
+    - cron: "17 5 * * 1"
+
+# Read the code, nothing else: the scanners need no write access or secrets.
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.x"
+      - run: pip install bandit==1.9.4 pip-audit==2.10.1
+      # Static analysis of the panel's code, every severity. A finding reviewed
+      # and judged fine carries `# nosec <id>`, with the reason on the line
+      # above. The tests are left out (asserts, fixture passwords).
+      - name: bandit
+        run: bandit -r kpanel -x '*/test_*.py'
+      # Known vulnerabilities in the image's pinned dependencies.
+      - name: pip-audit
+        run: pip-audit -r kpanel/requirements.txt
+      # The panel's Dockerfile. Pinned by digest, like the actions above.
+      - name: hadolint
+        run: docker run --rm -i hadolint/hadolint:v2.14.0@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e < kpanel/Dockerfile

@@ -34,7 +34,8 @@ def java_name(cell: str):
 
 
 def main():
-    with urllib.request.urlopen(urllib.request.Request(URL, headers=UA), timeout=30) as r:
+    # URL is a literal https:// constant.
+    with urllib.request.urlopen(urllib.request.Request(URL, headers=UA), timeout=30) as r:  # nosec B310
         wt = json.loads(r.read())["parse"]["wikitext"]
     body = wt.split("== List of game rules ==", 1)[1].split("== Additional behavior ==", 1)[0]
     rules = {}

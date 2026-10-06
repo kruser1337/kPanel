@@ -35,7 +35,8 @@ class GitHub:
                 **({"Content-Type": "application/json"} if body is not None else {}),
             })
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
+            # The URL is API (https) plus a path: never file: or another scheme.
+            with urllib.request.urlopen(req, timeout=20) as r:  # nosec B310
                 return json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
             try:

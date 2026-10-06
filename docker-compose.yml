@@ -23,7 +23,7 @@ services:
     image: itzg/minecraft-server:stable-java25
     restart: unless-stopped
     # No setuid binary in the container can gain privileges (itzg drops from
-    # root to uid 1000 without one, so this costs nothing).
+    # root to UID:GID below without one, so this costs nothing).
     security_opt: ["no-new-privileges:true"]
     tty: true
     stdin_open: true
@@ -33,6 +33,12 @@ services:
     environment:
       EULA: "TRUE"
       TZ: "${TZ:-Etc/UTC}"
+      # The server's service account (kpanel/owners.py has every id). Not the
+      # image's default 1000, which on most hosts is the first person's login:
+      # without user-namespace remapping a container's uid is the host's.
+      # volume-init hands /data to it before the server starts.
+      UID: "10000"
+      GID: "10000"
 
       # --- version pin -------------------------------------------------------
       # Pinned, never floating: a restart must not silently change the jar.
@@ -70,8 +76,18 @@ services:
       # it. (Set to an empty string, it would be an empty password.) The port is
       # never published; only containers in this stack can reach it.
       ENABLE_RCON: "true"
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
     volumes:
-      - mc-data:/data
+      # nocopy: Docker gives a fresh, empty volume the owner and mode of the
+      # image's directory (/data here is 1000's, 0750), undoing volume-init.
+      # Only the long form takes the option. Needed wherever the image has the
+      # directory; the panel's and FileBrowser's images have no /data.
+      - type: volume
+        source: mc-data
+        target: /data
+        volume: {nocopy: true}
 
   mc-backup:
     # Pinned, like the server: a broken or compromised latest would otherwise
@@ -80,18 +96,19 @@ services:
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     # The image's cron scheduling refuses to run unless crond is root, so crond
-    # stays root, with only what it needs: CHOWN for the line below, SETUID and
-    # SETGID to start each backup as uid 1000 (CRON_BACKUP_UID), which then has
-    # no capability at all. /backups is handed to 1000 on every start: until
-    # 0.2 the backups were taken as root, so an existing volume is root's. The
-    # archives already in it stay root's and readable; pruning them needs only
-    # the directory.
+    # stays root, with only what it needs: SETUID and SETGID to start each
+    # backup as the server's uid (CRON_BACKUP_UID), which then has no
+    # capability at all. The server's uid because a backup must read every
+    # file the server writes, whatever mode a plugin gives it. volume-init
+    # hands /backups to that uid before this starts.
     cap_drop: [ALL]
-    cap_add: [CHOWN, SETUID, SETGID]
-    entrypoint: ["/bin/sh", "-c", "chown 1000:1000 /backups && exec /usr/bin/backup loop"]
+    cap_add: [SETUID, SETGID]
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
     environment:
       TZ: "${TZ:-Etc/UTC}"
-      CRON_BACKUP_UID: "1000"
+      CRON_BACKUP_UID: "10000"
       # Twice a day at fixed clock times, keeping the newest 4 (two days back).
       # A cron schedule rather than an interval: an interval restarts with the
       # container, so frequent restarts would mean no backups at all.
@@ -109,17 +126,36 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    # nocopy, as for mc: this image has a /data and a /backups of root's.
     volumes:
-      - mc-data:/data:ro
-      - mc-backups:/backups
+      - type: volume
+        source: mc-data
+        target: /data
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: mc-backups
+        target: /backups
+        volume: {nocopy: true}
 
   # File manager over the world, configs, logs and plugins; backups read-only.
   filebrowser:
     # FileBrowser Quantum, the maintained fork of filebrowser/filebrowser.
     image: gtstef/filebrowser:1.5.6-stable-slim
     restart: unless-stopped
+    # The server's service account (the image's own user is 1000), so the files
+    # it writes are the server's, like the server's own.
+    user: "10000:10000"
     security_opt: ["no-new-privileges:true"]
     mem_limit: 384m
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    environment:
+      # The config the entrypoint writes. FileBrowser requires the file this
+      # names to exist even with -c; the image points it into the database
+      # volume, where only Docker's copy of the image's sample config put one.
+      FILEBROWSER_CONFIG: /tmp/config.yaml
     # Published nowhere, and no login of its own: the panel serves it under
     # /files/ (FILES_UPSTREAM below), behind the panel's host check and login.
     # On a port of its own, a web page using DNS rebinding could write to /data,
@@ -127,7 +163,8 @@ services:
     # The config is written on every start, so it lives here. It holds no
     # variables, and the quoted 'EOF' keeps the shell from expanding any. defaultEnabled
     # must be explicit on every source: with more than one, Quantum otherwise
-    # defaults to false and users get "no access to source".
+    # defaults to false and users get "no access to source". cacheDir is under
+    # /tmp because the image's home, where it would go, isn't this user's.
     entrypoint:
       - /bin/sh
       - -c
@@ -136,6 +173,7 @@ services:
         server:
           port: 80
           baseURL: /files/
+          cacheDir: /tmp/filebrowser
           disableUpdateCheck: true
           disablePreviews: true
           disableWebDAV: true
@@ -165,15 +203,18 @@ services:
         fi
         cd /home/filebrowser
         # The server's umask: files it writes stay group-writable, so the panel
-        # (group 1000) can still save a server.properties uploaded here.
+        # (the server's group) can still save a server.properties uploaded here.
         umask 002
         exec ./filebrowser -c /tmp/config.yaml
-    # uid 1000, like the server, so files it writes stay readable. Don't edit
-    # world/ files while players are online.
+    # Don't edit world/ files while players are online.
     volumes:
       - mc-data:/data
       - mc-backups:/backups:ro
-      - filebrowser-db:/home/filebrowser/data
+      # nocopy, as for mc: the image's directory is 1000's.
+      - type: volume
+        source: filebrowser-db
+        target: /home/filebrowser/data
+        volume: {nocopy: true}
     # Only the panel can reach it: on the default network, code in the server
     # could use this login-less file manager directly.
     networks: [files]
@@ -192,11 +233,14 @@ services:
     mem_limit: 96m
     # Shares mc's process namespace to read the JVM's CPU and memory from /proc.
     # Deliberately not the Docker socket, which would expose every container's
-    # environment on the host. The image runs as uid 1001 (group 1000), not the
-    # server's 1000: the kernel lets no server process, plugins included, read
-    # the environment or memory of any process here, the healthcheck and
-    # `docker compose exec` included.
+    # environment on the host. The image runs as uid 10001 in the server's
+    # group, not as the server's 10000: the kernel lets no server process,
+    # plugins included, read the environment or memory of any process here, the
+    # healthcheck and `docker compose exec` included.
     pid: "service:mc"
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
     # Loopback only. That, with the panel's Host check against DNS rebinding
     # (KPANEL_ALLOWED_HOSTS below), is what makes running without a login safe.
     ports:
@@ -204,14 +248,15 @@ services:
     environment:
       # The panel can op, ban and read the world, so it refuses to start until
       # it is told how it is protected. Here: only this machine can reach it.
-      # compose/lan.yml clears this and requires KPANEL_BASIC_AUTH instead.
+      # compose/lan.yml clears this and requires KPANEL_PASSWORD_HASH instead.
       KPANEL_ALLOW_NO_AUTH: "1"
       # The login, when there is one: an argon2id hash, never the password.
       # Make it with `docker compose run --rm --build hashpw` (service below).
       KPANEL_USER: "${KPANEL_USER:-admin}"
       KPANEL_PASSWORD_HASH: "${KPANEL_PASSWORD_HASH:-}"
-      # Deprecated: the password in plain text, user:password. Still works, with
-      # a warning on every page; kPanel 0.4 refuses it.
+      # Not a login: 0.2's plain-text password, user:password, refused since
+      # 0.4. Passed on only so the panel can refuse to start with it and say
+      # how to replace it, rather than run while it is still in .env.
       KPANEL_BASIC_AUTH: "${KPANEL_BASIC_AUTH:-}"
       # Without a login the panel answers only to localhost, so a web page can't
       # point its own domain at this machine and drive the panel (DNS
@@ -239,7 +284,7 @@ services:
       GAME_HOST: "mc"
     # Read-write, and not for one file only: Settings writes server.properties
     # in place (everything else goes through RCON), but the server creates its
-    # files group-writable, so group 1000 can write nearly all of /data,
+    # files group-writable, so the server's group can write nearly all of /data,
     # plugins/ included. Code that takes over the panel can run code in the
     # server. Keep the panel behind its login or on loopback.
     volumes:
@@ -250,6 +295,32 @@ services:
       - kpanel-state:/var/lib/kpanel
     # default: the server (RCON) and the published port; files: the file manager.
     networks: [default, files]
+
+  # Hands the volumes to the service accounts (kpanel/owners.py), then exits:
+  # a fresh volume, or one an older kPanel left to uid 1000 or root. Runs on
+  # every `up`, before the services that use them; after the first time it
+  # changes nothing, but still reads through every volume, the world included.
+  # Root for those seconds, running only owners.py, with no network, a
+  # read-only image and two capabilities: CHOWN, and DAC_READ_SEARCH, which
+  # lets it read any file in the volumes (to walk directories it doesn't own).
+  volume-init:
+    build:
+      context: ./kpanel
+    # Explicitly "no": Coolify gives a service without restart: its default,
+    # unless-stopped, which would start this again every time it exits.
+    restart: "no"
+    user: "0:0"
+    command: ["python", "owners.py"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - mc-data:/volumes/mc-data
+      - mc-backups:/volumes/mc-backups
+      - filebrowser-db:/volumes/filebrowser-db
+      - kpanel-state:/volumes/kpanel-state
 
   # Makes the panel's login hash. Not started by `up`; run it when you need it:
   #
