@@ -46,7 +46,8 @@ git pull && docker compose up -d --build
   in the server could op players or open pull requests with the panel's
   token in the setups without a login. The panel now refuses requests from
   the stack's other services (behind Tailscale it answers only the sidecar),
-  and the file manager is on a network only the panel shares.
+  and the file manager is on a network only the panel shares (not on
+  Coolify; see below).
 - **The old file-manager password stayed on disk in plain text (Low).** With
   `compose/lan.yml`, 0.2 stored it in the file manager's database. That
   database is deleted on the first start of 0.3 (see Upgrading).
@@ -83,6 +84,12 @@ git pull && docker compose up -d --build
   already logged in gets HTTP 429. That is the price of the limit.
 - **A container you add to the stack yourself can reach the panel** over the
   compose network: only the stack's own services are refused (see Fixed).
+- **On Coolify, the stack's own containers can reach the file manager.**
+  Coolify adds its own network to every service, so the file manager's
+  separate network doesn't isolate it there. Only this stack's containers are
+  on that network, and the only one that matters, the server, can already
+  write the whole server folder; through the file manager it gains read
+  access to the backups of its own world.
 - **`KPANEL_BASIC_AUTH`, the plain-text login, is removed in 0.4**, not here,
   so that upgrading never locks anyone out.
 - **No-login mode on Docker Engine older than 28.** Docker 28 drops packets

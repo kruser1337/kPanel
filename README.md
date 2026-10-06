@@ -177,9 +177,14 @@ stack's own containers reach the panel over the compose network instead, so
 the panel refuses requests from them (`KPANEL_REFUSE_PEERS`: `mc`, `mc-backup`,
 `filebrowser`), and with `compose/tailscale.yml` it answers only the sidecar
 (`KPANEL_ONLY_PEERS`). The file manager is on a network only the panel shares.
-Two gaps remain. A container you add to the stack yourself is not on that
-list. And if the host itself is on your tailnet, code in the server can go out
-through the host and back in through the sidecar, like any tailnet device.
+Three gaps remain:
+
+- A container you add to the stack yourself is not on that list.
+- If the host itself is on your tailnet, code in the server can go out
+  through the host and back in through the sidecar, like any tailnet device.
+- On Coolify, which adds its own network to every service, the stack's own
+  containers can reach the file manager directly. For the server that means
+  read access to its own backups; it can already write the rest.
 
 Without a login, the panel answers only to `localhost` (and names in
 `KPANEL_ALLOWED_HOSTS`). That stops **DNS rebinding**, where a web page you
