@@ -7,8 +7,9 @@
 # FILES_PASSWORD, so its database holds that password the way users' do. Then
 # starts the current docker-compose.yml on the same volumes and checks that
 # the marker is gone from every file in the filebrowser-db volume, that the
-# file manager answers, and that its new database is a noauth one. A second
-# start must keep that database (only one holding a password is dropped).
+# file manager answers, and that its new database is a noauth one, owned by
+# the file manager's service account (0.2.2's was uid 1000's). A second start
+# must keep that database (only one holding a password is dropped).
 #
 # Only the filebrowser service runs; nothing is published.
 set -euo pipefail
@@ -70,6 +71,7 @@ logs=$("${NEW[@]}" logs filebrowser 2>&1)
 after=$(db "grep -l -a -r -F '$MARK' /d || true" | wc -l | tr -d ' ')
 fresh=$(db "grep -a -c -e '\"noauth\":true' /d/database.db" || true)
 ino1=$(db 'stat -c %i /d/database.db')
+owner=$(db 'stat -c %u:%g /d /d/database.db' | sort -u | tr '\n' ' ')
 # The slim image has no HTTP client: ask from a throwaway container on the file
 # manager's network (since N-05 it shares one only with the panel).
 answers=$("$DOCKER" run --rm --network "${P}_files" alpine:3 wget -q -O /dev/null http://filebrowser:80/files/ 2>&1 && echo yes || echo no)
@@ -87,6 +89,7 @@ check "$([[ $after == 0 ]] && echo 1 || echo 0)" "after the upgrade, no file in 
 check "$(grep -q 'removed the file manager' <<<"$logs" && echo 1 || echo 0)" "the upgrade said so in the file manager's log"
 check "$([[ ${fresh:-0} -gt 0 ]] && echo 1 || echo 0)" "the new database is a noauth one"
 check "$([[ $answers == yes ]] && echo 1 || echo 0)" "the file manager answers on /files/"
+check "$([[ $owner == "10000:10000 " ]] && echo 1 || echo 0)" "the volume and the new database are 10000's ($owner)"
 removals=$(grep -c 'removed the file manager' <<<"$logs2" || true)
 check "$([[ $ino1 == "$ino2" && $removals == 1 ]] && echo 1 || echo 0)" "a restart keeps the clean database (inode $ino1 -> $ino2, removed $removals time(s) over two starts)"
 [[ ${DEBUG:-} ]] && printf '%s\n' "--- log after restart:" "$logs2"

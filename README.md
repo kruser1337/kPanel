@@ -101,8 +101,10 @@ with Docker and this repository will do.
 It asks for a password (12 characters or more) and prints a line like
 `KPANEL_PASSWORD_HASH='$argon2id$v=19$…'`. Paste it into `.env` **with its
 single quotes**: without them compose reads each `$` as a variable. Log in as
-`admin` (or set `KPANEL_USER`). Upgrading from 0.2 with `KPANEL_BASIC_AUTH`?
-It still works in 0.3, and every page tells you to make the swap.
+`admin` (or set `KPANEL_USER`). Still have `KPANEL_BASIC_AUTH`, the plain-text
+password of 0.2 and 0.3, in `.env`? Since 0.4 the panel refuses to start while
+it is there, and its log (`docker compose logs kpanel`) says what to do: make
+the hash as above, put it in `.env`, and delete the `KPANEL_BASIC_AUTH` line.
 
 **Passwords are enforced, not suggested.** `compose/lan.yml` publishes the panel
 (and with it the file manager, at `/files/`) to your network, so the panel
@@ -147,13 +149,14 @@ To opt in, set `VERSION` and `PAPER_BUILD` to the beta and add
 
 ## What's in the stack
 
-| Container | Job |
-|---|---|
-| `mc` | Paper server ([`itzg/minecraft-server`](https://github.com/itzg/docker-minecraft-server)) |
-| `mc-backup` | Scheduled world backups, pruned to a fixed count |
-| `kpanel` | The panel. Python standard library plus PyYAML and argon2-cffi; no database |
-| `filebrowser` | [FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) over the world files, served by the panel at `/files/` |
-| `tailscale` | *Only with `compose/tailscale.yml`:* puts the panel and file manager on your tailnet |
+| Container | Job | Runs as |
+|---|---|---|
+| `mc` | Paper server ([`itzg/minecraft-server`](https://github.com/itzg/docker-minecraft-server)) | uid 10000 (its entrypoint starts as root and drops to it) |
+| `mc-backup` | Scheduled world backups, pruned to a fixed count | uid 10000; its scheduler is root with only `SETUID`/`SETGID` |
+| `kpanel` | The panel. Python standard library plus PyYAML and argon2-cffi; no database | uid 10001, group 10000 |
+| `filebrowser` | [FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) over the world files, served by the panel at `/files/` | uid 10000 |
+| `volume-init` | Hands the volumes to those users on every `up`, then exits (shown as *Exited (0)*) | root for a few seconds, no network, only `CHOWN` and `DAC_READ_SEARCH` (re-own and read any file in the volumes) |
+| `tailscale` | *Only with `compose/tailscale.yml`:* puts the panel and file manager on your tailnet | root (the upstream image) |
 
 The panel writes only `server.properties` and talks to the server over RCON. It
 deliberately has **no access to the Docker socket** — that would expose every
@@ -223,13 +226,40 @@ same machine, readable by whoever can read `.env`. Instead:
 
 - **The server can't read the panel's secrets.** The panel shares the
   server's process namespace (for the CPU and memory graphs) but runs as its
-  own user, uid 1001, so the kernel doesn't let code in the server, a plugin
+  own user, uid 10001, so the kernel doesn't let code in the server, a plugin
   say, read the environment or memory of any panel process: not the panel
   itself, not its healthcheck, not a `docker compose exec`.
   `tests/integration/plugin_isolation.sh` checks exactly that, from inside the
   server container.
 - The panel runs with no Linux capabilities on a read-only filesystem, and
   never logs a secret.
+
+**Service accounts, not your login.** Every service runs as a service account
+with a high id (the table above; the ids are in `kpanel/owners.py`), not as
+uid 1000. Docker doesn't remap users by default, so a container's uid is the
+same number on the host, and on most Linux machines 1000 is the first person's
+login. Up to 0.3 the server ran as 1000: a process breaking out of the
+container would have been you. The `volume-init` service re-owns the volumes
+before the others start, which also upgrades an older install by itself. It
+reads through every volume on every `up`, the world included, which adds a
+moment to each start for a big world. For
+separation beyond that, enable Docker's
+[user-namespace remapping](https://docs.docker.com/engine/security/userns-remap/)
+on the host; kPanel needs no change for it.
+
+**Scans.** Every pull request, and once a week, CI runs
+[bandit](https://github.com/PyCQA/bandit) over the panel's code,
+[pip-audit](https://github.com/pypa/pip-audit) over its pinned dependencies,
+and [hadolint](https://github.com/hadolint/hadolint) over its Dockerfile
+(`.github/workflows/security.yml`). A finding judged harmless is marked
+`# nosec` in the code, with the reason next to it. To run them yourself:
+
+```bash
+pip install bandit pip-audit
+bandit -r kpanel -x '*/test_*.py'
+pip-audit -r kpanel/requirements.txt
+docker run --rm -i hadolint/hadolint < kpanel/Dockerfile
+```
 
 **What the panel itself can reach.** The other direction is not sealed off:
 the panel is in the server's group, and the server creates its files

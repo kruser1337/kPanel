@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs INSIDE the mc container, as uid 1000: what a malicious plugin could do.
+# Runs INSIDE the mc container, as uid 10000: what a malicious plugin could do.
 #
 #   isolation_poller.sh <seconds> <outdir>
 #

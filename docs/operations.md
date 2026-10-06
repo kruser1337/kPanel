@@ -198,6 +198,8 @@ an **empty** server folder. That is a safety check, not a bug.
    For an older archive, unpack it yourself instead:
    `docker run --rm -v ${V}_mc-data:/data -v ${V}_mc-backups:/backups:ro alpine tar xzf /backups/world-<ts>.tar.gz -C /data`
 4. Start again: `docker compose up -d`. The server re-downloads its jar.
+   Whoever owns the unpacked files (root, or uid 1000 in an archive from
+   before 0.4), `volume-init` hands them to the server's user before it starts.
 
 A backup made by a newer Minecraft version can't be used with an older one.
 
@@ -212,7 +214,9 @@ docker compose up -d --build
 
 Some releases need a step of your own; [`CHANGELOG.md`](../CHANGELOG.md) says
 which, under **Upgrading**. (0.2 → 0.3: replace `KPANEL_BASIC_AUTH` with a
-password hash, if you use one; the dashboard graphs start over once.)
+password hash, if you use one; the dashboard graphs start over once. 0.3 → 0.4:
+the panel no longer starts with `KPANEL_BASIC_AUTH` at all, and the first start
+re-owns every volume, which takes a moment for a big world.)
 
 **Minecraft / Paper:** the version is pinned in `docker-compose.yml`
 (`VERSION`, `PAPER_BUILD`, and `PAPER_CHANNEL` for beta builds). Never let it

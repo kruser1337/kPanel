@@ -79,8 +79,6 @@ CFG = {
     # which is only safe on loopback or behind a tailnet or VPN.
     "user": os.environ.get("KPANEL_USER", "admin"),
     "password_hash": os.environ.get("KPANEL_PASSWORD_HASH", ""),
-    # Deprecated: "user:password" in plain text. Works in 0.3 with a warning.
-    "basic_auth": os.environ.get("KPANEL_BASIC_AUTH", ""),
     # Asks api.github.com twice a day whether a newer kPanel exists. 0 turns it off.
     "update_check": os.environ.get("KPANEL_UPDATE_CHECK", "1") != "0",
     # Host names the panel answers to besides localhost, comma-separated; "*" is
@@ -510,7 +508,7 @@ _LOGIN = {}
 
 def login():
     """The auth.Login for the current CFG (rebuilt only when CFG's login changes)."""
-    key = (CFG["user"], CFG["password_hash"], CFG["basic_auth"])
+    key = (CFG["user"], CFG["password_hash"])
     if key not in _LOGIN:
         _LOGIN.clear()
         _LOGIN[key] = auth.Login(*key)
@@ -522,21 +520,14 @@ def auth_configured():
     return login().configured()
 
 
-PLAINTEXT_WARNING = (
-    "The panel password is stored in plain text (KPANEL_BASIC_AUTH). Run "
-    "<code>docker compose run --rm --build hashpw</code>, put the line it prints "
-    "into .env in place of KPANEL_BASIC_AUTH, and run <code>docker compose up -d</code>. "
-    "kPanel 0.4 will refuse to start with KPANEL_BASIC_AUTH.")
-
-
-def require_auth_boundary(basic_auth, allow_no_auth):
+def require_auth_boundary(login_configured, allow_no_auth):
     """Refuse to start a panel that anyone who can reach it can control.
 
     The panel has RCON, can op and ban players, read the world and the logs.
     Behind a tailnet that is fine and the sidecar is the boundary; published on
     a public port it is not. One of the two has to be a deliberate choice.
     """
-    if basic_auth or allow_no_auth:
+    if login_configured or allow_no_auth:
         return
     raise SystemExit(
         "kPanel refuses to start without an access boundary.\n"
@@ -680,9 +671,7 @@ def head(active, filter_placeholder="", refresh=0):
             f"<title>kPanel</title><link rel=icon type=image/png href=/favicon.png>"
             f"<style>{ui.CSS}</style></head><body{r}><header><div class=bar-in><h1>"
             f"{'<img class=logo src=/favicon.png alt=>' if FAVICON_PNG else ''}kPanel</h1>"
-            f"<nav>{links}{files}</nav>{q}</div></header><main>"
-            + (f'<div class="card warn note" role=alert>{ui.icon("alert-triangle")}<div>{PLAINTEXT_WARNING}</div></div>'
-               if login().deprecated else ""))
+            f"<nav>{links}{files}</nav>{q}</div></header><main>")
 
 
 COFFEE_URL = "https://buymeacoffee.com/kruser1337"
@@ -1317,8 +1306,8 @@ def make_undumpable(libc=None):
     """Defence in depth for the main process; not the boundary.
 
     kpanel shares mc's PID namespace (for the CPU and memory graphs). The
-    boundary is the uid: the panel runs as 1001, the server and its plugins as
-    1000, and the kernel lets no process read another uid's /proc/<pid>/environ,
+    boundary is the uid: the panel runs as 10001, the server and its plugins as
+    10000 (owners.py), and the kernel lets no process read another uid's /proc/<pid>/environ,
     mem or root. That covers every process in this container, the healthcheck
     and `docker compose exec` included. Non-dumpable additionally makes this
     one's /proc entries root's. Linux only; returns whether it took.
@@ -1336,7 +1325,7 @@ def shares_server_uid(props=None, uid=None):
     """True if the panel runs as the uid that owns the server's files.
 
     Then a plugin could read this container's processes (environment: the login
-    hash, the GitHub token). The image runs as 1001, so this means someone set
+    hash, the GitHub token). The image runs as 10001, so this means someone set
     `user:` to the server's uid.
     """
     try:
@@ -1360,23 +1349,21 @@ if __name__ == "__main__":
     if shares_server_uid():
         print(f"WARNING: the panel runs as uid {os.getuid()}, the owner of {CFG['props']}: code in the "
               "server could read the panel's environment. Run it as another uid in the server's "
-              "group (the image's default is 1001:1000).", flush=True)
+              "group (the image's default is 10001:10000).", flush=True)
     try:
+        auth.refuse_plaintext()
         login().validate()
     except auth.LoginError as ex:
         raise SystemExit(f"kPanel refuses to start: {ex}") from None
     require_auth_boundary(auth_configured(), os.environ.get("KPANEL_ALLOW_NO_AUTH", ""))
-    if login().deprecated:
-        print("WARNING: " + re.sub(r"</?code>", "`", PLAINTEXT_WARNING), flush=True)
-    elif CFG["basic_auth"]:
-        print("WARNING: KPANEL_BASIC_AUTH is ignored because KPANEL_PASSWORD_HASH is set; "
-              "remove it from .env.", flush=True)
     port = int(os.environ.get("PORT", "8080"))
     print(f"kPanel on :{port}, settings {settings_mode()}, "
-          f"auth {('basic, plaintext (deprecated)' if login().deprecated else 'basic, argon2id') if auth_configured() else 'none (network is the boundary)'}, "
+          f"auth {'basic, argon2id' if auth_configured() else 'none (network is the boundary)'}, "
           f"rcon {CFG['rcon_host']}:{CFG['rcon_port']} password {'set' if CFG['rcon_password'] else 'from server.properties'}",
           flush=True)
     threading.Thread(target=sampler, daemon=True, name="history-sampler").start()
     if CFG["update_check"]:
         release.start()
-    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    # Every interface of the container: who reaches it is the compose file's
+    # port binding (127.0.0.1 in the base), plus the host and peer checks.
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()  # nosec B104

@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 REPO = "kruser1337/kPanel"
 CHECK_SECONDS = 12 * 3600  # unauthenticated API: 60 requests/h per IP, this uses 2/day
 
@@ -35,7 +35,8 @@ def fetch_latest(repo=REPO, timeout=5):
     req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest",
                                  headers={"Accept": "application/vnd.github+json", "User-Agent": "kpanel"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        # A literal https:// URL: never file: or another scheme.
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310
             data = json.load(r)
         return data.get("tag_name") if isinstance(data, dict) else None
     except (OSError, ValueError):  # URLError/HTTPError are OSErrors; ValueError: bad JSON

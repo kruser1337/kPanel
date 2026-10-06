@@ -3,15 +3,18 @@
 # steps for compose/lan.yml, then a sweep for every password it ever held.
 #
 #   tests/integration/upgrade_sweep.sh [old-ref]   (default 5a8e779, 0.2.2;
-#                                                   2b032d8 is 0.3.0 as verified)
+#                                                   v0.3.0 for 0.3)
 #
 # The old install gets marker secrets: KPANEL_BASIC_AUTH=admin:<panel marker>,
 # FILES_PASSWORD=<files marker>, a GitHub token marker. After the upgrade:
-# the plaintext login still works (deprecated), the world, an op and a MOTD
-# edit survive; then hashpw makes a hash of a third marker password, .env is
-# swapped as documented, and only that password logs in. Finally every volume
-# of the project (the orphaned kpanel-data included), every container's
-# environment and every container's log is grepped for the markers:
+# the panel refuses to start while KPANEL_BASIC_AUTH is set, and says how to
+# replace it, while the server runs on with the world, an op and a MOTD edit;
+# then hashpw makes a hash of a third marker password, .env is swapped as
+# documented, and only that password logs in. Every volume now belongs to its
+# service account (no file of 1000's or root's left), and the panel can still
+# save a setting. Finally every volume of the project (the orphaned
+# kpanel-data included), every container's environment and every container's
+# log is grepped for the markers:
 #
 #   panel password, files password, new password: 0 hits anywhere
 #   GitHub token: only in the kpanel container's environment (by design)
@@ -23,7 +26,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 DOCKER=${DOCKER:-docker}
 OLD_REF=${1:-5a8e779}
-P=${PROJECT:-kpup$(echo "$OLD_REF" | cut -c1-4)}
+P=${PROJECT:-kpup$(echo "$OLD_REF" | tr -cd a-z0-9 | cut -c1-4)}   # no "." in a compose project name
 PORT=${PORT:-18282}
 work=$(mktemp -d)
 mkdir "$work/old"
@@ -77,16 +80,29 @@ old_login=$(login "$PANEL")
 save=$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$PANEL" -H 'Host: localhost' -H 'Sec-Fetch-Site: same-origin' \
   --data-urlencode 'p:motd=kept across the upgrade' "http://127.0.0.1:$PORT/save" || true)
 echo "   old: login $old_login, MOTD save $save"
-"${OLD[@]}" down >/dev/null 2>&1   # volumes kept: an in-place upgrade
+# No `down`: CHANGELOG's upgrade is `git pull && docker compose up -d --build`
+# over the running stack, so the new file recreates the old containers in place.
 # Control for the sweep: where the old version left a password, it finds it.
 before=$("$DOCKER" run --rm -v "${P}_filebrowser-db:/v:ro" alpine:3 sh -c "grep -r -l -a -F '$FILES' /v || true" | wc -l | tr -d ' ')
 
-echo "== upgrade: git pull && docker compose up -d --build (same .env)"
+echo "== upgrade: git pull && docker compose up -d --build (same .env, KPANEL_BASIC_AUTH still in it)"
 "${NEW[@]}" up -d --build >/dev/null 2>&1
 wait_started "${NEW[@]}" || { echo "FAIL: the server never started after the upgrade; its log ends:" >&2; "${NEW[@]}" logs --tail 15 mc >&2; exit 1; }
-wait_panel
+# Right after the first start: a second volume-init run must not be what fixes it.
+strays() {  # strays <volume> <uid>: files in it not owned by <uid>:10000
+  "$DOCKER" run --rm -v "${P}_$1:/v:ro" alpine:3 sh -c "find /v ! -user $2 -o ! -group 10000 | wc -l" | tr -d ' '
+}
+owners=""
+for vu in mc-data:10000 mc-backups:10000 filebrowser-db:10000 kpanel-state:10001; do
+  owners+="${vu%%:*}=$(strays "${vu%%:*}" "${vu##*:}") "
+done
+refusal=""
+for _ in $(seq 30); do
+  refusal=$("${NEW[@]}" logs --no-color kpanel 2>&1 | grep -m1 'refuses to start' || true)
+  [[ -n $refusal ]] && break
+  sleep 2
+done
 plain_login=$(login "$PANEL")
-banner=$(curl -s -u "admin:$PANEL" -H 'Host: localhost' "http://127.0.0.1:$PORT/" | grep -c 'run --rm --build hashpw' || true)
 ops=$("${NEW[@]}" exec -T mc cat /data/ops.json | tr -d '\r')
 motd=$("${NEW[@]}" exec -T mc grep '^motd=' /data/server.properties | tr -d '\r')
 
@@ -97,6 +113,9 @@ line=$(printf %s "$NEWPW" | "${NEW[@]}" run --rm -T --build hashpw 2>/dev/null |
 wait_panel
 new_login=$(login "$NEWPW")
 old_after=$(login "$PANEL")
+save2=$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$NEWPW" -H 'Host: localhost' -H 'Sec-Fetch-Site: same-origin' \
+  --data-urlencode 'p:motd=saved as the service account' "http://127.0.0.1:$PORT/save" || true)
+motd2=$("${NEW[@]}" exec -T mc grep '^motd=' /data/server.properties | tr -d '\r')
 
 echo "== sweep: volumes, container environments, logs"
 vols=$("$DOCKER" volume ls -q | grep "^${P}_" | tr '\n' ' ')
@@ -119,10 +138,13 @@ log_hits=$("${NEW[@]}" logs --no-color 2>&1 | grep -c -F -f "$pat" -e "$TOKEN" |
 echo "   volumes swept: $vols"
 check "$([[ $old_login == 200 ]] && echo 1 || echo 0)" "control: the old install logged in with its plaintext password ($old_login)"
 echo "  info  before the upgrade, the files password was in $before file(s) of filebrowser-db (0.2.2: 1; 0.3.0 never stored it)"
-check "$([[ $plain_login == 200 && $banner -gt 0 ]] && echo 1 || echo 0)" "after the upgrade the plaintext login still works ($plain_login), with the hashpw reminder"
+check "$([[ $refusal == *KPANEL_BASIC_AUTH* && $refusal == *hashpw* && $plain_login != 200 ]] && echo 1 || echo 0)" "with KPANEL_BASIC_AUTH still set the panel refuses to start, and says how to fix it (login: $plain_login)"
+echo "        ${refusal:-no refusal logged}"
 check "$([[ $ops == *Notch* && $motd == *"kept across the upgrade"* ]] && echo 1 || echo 0)" "the op and the MOTD edit survived"
 check "$([[ -n $line ]] && echo 1 || echo 0)" "hashpw printed a KPANEL_PASSWORD_HASH line"
 check "$([[ $new_login == 200 && $old_after == 401 ]] && echo 1 || echo 0)" "after the swap only the new password logs in ($new_login / old $old_after)"
+check "$([[ $owners == "mc-data=0 mc-backups=0 filebrowser-db=0 kpanel-state=0 " ]] && echo 1 || echo 0)" "after the first start no file has another owner, per volume: $owners"
+check "$([[ $save2 == 200 && $motd2 == *"saved as the service account"* ]] && echo 1 || echo 0)" "the panel still saves server.properties ($save2)"
 check "$([[ -z $vol_hits ]] && echo 1 || echo 0)" "no password marker in any volume: ${vol_hits:-none}"
 check "$([[ -z $env_hits ]] && echo 1 || echo 0)" "no password marker in any container environment: ${env_hits:-none}"
 check "$([[ $log_hits == 0 ]] && echo 1 || echo 0)" "no marker (token included) in any log: $log_hits"

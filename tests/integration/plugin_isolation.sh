@@ -6,7 +6,7 @@
 # Brings up the real stack (project "kpiso", nothing published) with marker
 # secrets: a GitHub token, a panel password hashed by the hashpw service, and a
 # second password typed into hashpw.py while the test watches. Then, as uid
-# 1000 inside mc (a plugin's uid and namespace), it polls /proc and tries to
+# 10000 inside mc (a plugin's uid and namespace), it polls /proc and tries to
 # read environ, mem and root of every process it can see:
 #
 #   A. while the kpanel healthcheck fires and while
@@ -74,7 +74,7 @@ kuid=$("${DC[@]}" exec -T kpanel id 2>/dev/null | tr -d '\r')
 echo "   kpanel runs as: $kuid; kernel.yama.ptrace_scope=$yama"
 
 poll() {  # poll <seconds> <outdir> > log
-  "${DC[@]}" exec -T -u 1000:1000 mc bash -s -- "$1" "$2" <"$here/isolation_poller.sh"
+  "${DC[@]}" exec -T -u 10000:10000 mc bash -s -- "$1" "$2" <"$here/isolation_poller.sh"
 }
 
 echo "== A: watching for ${WATCH_A}s: healthchecks + 'exec kpanel python hashpw.py' at its prompt"
@@ -102,13 +102,13 @@ is() { [[ $1 -gt 0 ]] && echo 1 || echo 0; }
 # Markers in everything the poller saved (grepped inside mc, patterns on stdin,
 # so they are never on a command line) and in the logs it printed.
 hits=$(printf '%s\n%s\n%s\n%s\n' "$TOKEN" "$PW" "$PW2" "$HASH" |
-  "${DC[@]}" exec -T -u 1000:1000 mc sh -c 'grep -l -a -r -F -f - /tmp/kpiso-a /tmp/kpiso-b' 2>/dev/null | tr -d '\r' || true)
+  "${DC[@]}" exec -T -u 10000:10000 mc sh -c 'grep -l -a -r -F -f - /tmp/kpiso-a /tmp/kpiso-b' 2>/dev/null | tr -d '\r' || true)
 loghits=$(cat "$work/a.log" "$work/b.log" | grep -c -F -e "$TOKEN" -e "$PW" -e "$PW2" -e "$HASH" || true)
 saved=$("${DC[@]}" exec -T mc sh -c 'cat /tmp/kpiso-a/* /tmp/kpiso-b/* 2>/dev/null | wc -c' | tr -d '\r ')
 
 # A "kpanel process": not the server's uid, or the panel's own commands.
 KP='(app\.py|hashpw|healthz)'
-kpanel_pids() { awk -v re="$KP" '$1=="SEEN" && ($3!="1000" || $0 ~ re) {print $2}' "$1" | sort -u; }
+kpanel_pids() { awk -v re="$KP" '$1=="SEEN" && ($3!="10000" || $0 ~ re) {print $2}' "$1" | sort -u; }
 leaks=0
 for log in "$work/a.log" "$work/b.log"; do
   for pid in $(kpanel_pids "$log"); do
@@ -121,15 +121,15 @@ echo
 echo "== result (ptrace_scope=$yama, $(grep -c '^SEEN' "$work/a.log" || true)+$(grep -c '^SEEN' "$work/b.log" || true) processes seen, $saved bytes read)"
 check "$([[ -z $hits && $loghits == 0 ]] && echo 1 || echo 0)" "no marker (token, hash, either password) in anything read: ${hits:-none}"
 check "$((1 - leaks))" "every kpanel process refused environ, mem and root"
-check "$(is "$(grep -E '^SEEN .*healthz' "$work/a.log" | grep -vc ' 1000 ' || true)")" "saw the healthcheck (control), and it did not run as the server's uid"
+check "$(is "$(grep -E '^SEEN .*healthz' "$work/a.log" | grep -vc ' 10000 ' || true)")" "saw the healthcheck (control), and it did not run as the server's uid"
 check "$(is "$(count '^SEEN .*app\.py' "$work/a.log")")" "control: saw the panel's main process"
 check "$(is "$(count '^SEEN .*hashpw\.py' "$work/a.log")")" "control: saw the exec'd hashpw.py"
 check "$(grep -q '^typed the password' "$work/pty-a.log" && echo 1 || echo 0)" "control: the password was typed into the exec'd hashpw.py"
 check "$(grep -q '^typed the password' "$work/pty-b.log" && echo 1 || echo 0)" "control: the password was typed into 'run hashpw'"
 check "$([[ $(count '^SEEN .*hashpw\.py' "$work/b.log") == 0 ]] && echo 1 || echo 0)" "'run hashpw' is not in the server's process namespace"
-check "$(is "$(count '^ENV [0-9]+ 1000 ok' "$work/a.log")")" "control: the server's own processes' environ is readable (the method works)"
+check "$(is "$(count '^ENV [0-9]+ 10000 ok' "$work/a.log")")" "control: the server's own processes' environ is readable (the method works)"
 if [[ $yama == 0 ]]; then
-  check "$(is "$(count '^MEM [0-9]+ 1000 ok' "$work/a.log")")" "control: the server's own processes' memory is readable (Yama 0)"
+  check "$(is "$(count '^MEM [0-9]+ 10000 ok' "$work/a.log")")" "control: the server's own processes' memory is readable (Yama 0)"
 else
   echo "  note  ptrace_scope=$yama: mem of same-uid processes is refused by Yama anyway; the uid check is what this run shows"
 fi
