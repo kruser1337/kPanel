@@ -27,12 +27,15 @@ cat >"$work/test.yml" <<'EOF'
 services:
   filebrowser:
     ports: !reset []
-    sysctls:
-      net.ipv4.ip_unprivileged_port_start: "0"
 EOF
-OLD=("$DOCKER" compose -p "$P" -f "$work/old/docker-compose.yml" -f "$work/old/compose/lan.yml" -f "$work/test.yml")
+# EXTRA_OVERLAY: more compose files, colon-separated, added after the test's
+# own (e.g. one that undoes a fix, to see the test fail).
+extra=()
+IFS=: read -r -a _xo <<<"${EXTRA_OVERLAY:-}"
+for _f in ${_xo[@]+"${_xo[@]}"}; do [[ -n $_f ]] && extra+=(-f "$_f"); done
+OLD=("$DOCKER" compose -p "$P" -f "$work/old/docker-compose.yml" -f "$work/old/compose/lan.yml" -f "$work/test.yml" ${extra[@]+"${extra[@]}"})
 # NEW_COMPOSE: upgrade to another compose file (e.g. 0.3.0's, to see this fail).
-NEW=("$DOCKER" compose -p "$P" -f "${NEW_COMPOSE:-$root/docker-compose.yml}" -f "$work/test.yml")
+NEW=("$DOCKER" compose -p "$P" -f "${NEW_COMPOSE:-$root/docker-compose.yml}" -f "$work/test.yml" ${extra[@]+"${extra[@]}"})
 cleanup() {
   "${NEW[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$work"

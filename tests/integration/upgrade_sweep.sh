@@ -39,8 +39,6 @@ services:
     ports: !reset []
   filebrowser:
     ports: !reset []
-    sysctls:
-      net.ipv4.ip_unprivileged_port_start: "0"
   kpanel:
     ports: !override
       - "127.0.0.1:$PORT:8080"
@@ -48,8 +46,13 @@ services:
       KPANEL_UPDATE_CHECK: "0"
 EOF
 printf 'KPANEL_BASIC_AUTH=admin:%s\nFILES_PASSWORD=%s\nKPANEL_GITHUB_TOKEN=%s\n' "$PANEL" "$FILES" "$TOKEN" >"$work/.env"
-OLD=("$DOCKER" compose -p "$P" --project-directory "$work/old" -f "$work/old/docker-compose.yml" -f "$work/old/compose/lan.yml" -f "$work/test.yml" --env-file "$work/.env")
-NEW=("$DOCKER" compose -p "$P" --project-directory "$root" -f "$root/docker-compose.yml" -f "$root/compose/lan.yml" -f "$work/test.yml" --env-file "$work/.env")
+# EXTRA_OVERLAY: more compose files, colon-separated, added after the test's
+# own (e.g. one that undoes a fix, to see the test fail).
+extra=()
+IFS=: read -r -a _xo <<<"${EXTRA_OVERLAY:-}"
+for _f in ${_xo[@]+"${_xo[@]}"}; do [[ -n $_f ]] && extra+=(-f "$_f"); done
+OLD=("$DOCKER" compose -p "$P" --project-directory "$work/old" -f "$work/old/docker-compose.yml" -f "$work/old/compose/lan.yml" -f "$work/test.yml" ${extra[@]+"${extra[@]}"} --env-file "$work/.env")
+NEW=("$DOCKER" compose -p "$P" --project-directory "$root" -f "$root/docker-compose.yml" -f "$root/compose/lan.yml" -f "$work/test.yml" ${extra[@]+"${extra[@]}"} --env-file "$work/.env")
 cleanup() {
   "${NEW[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
   "$DOCKER" volume rm "${P}_kpanel-data" >/dev/null 2>&1 || true

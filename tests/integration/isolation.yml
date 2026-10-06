@@ -8,8 +8,3 @@ services:
     ports: !reset []
     environment:
       KPANEL_UPDATE_CHECK: "0"
-  filebrowser:
-    # Docker Engine sets this in every container; Podman does not, and
-    # FileBrowser (uid 1000) binds :80.
-    sysctls:
-      net.ipv4.ip_unprivileged_port_start: "0"

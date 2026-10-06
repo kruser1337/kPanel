@@ -20,7 +20,7 @@
 # panel and the exec'd hashpw.py (else it proved nothing), it could read mc's
 # own processes (so the method works), and B's hashpw.py was not visible.
 #
-# Needs: docker (or DOCKER=podman) with compose >= 2.24, python3, network for
+# Needs: Docker with compose >= 2.24, python3, network for
 # the first pull and the Paper download. Takes about 3 minutes plus the pull.
 set -euo pipefail
 
@@ -35,10 +35,12 @@ tag=$(LC_ALL=C tr -dc a-z0-9 </dev/urandom | head -c 12 || true)
 TOKEN="github_pat_KPISOTOKEN_$tag"
 PW="KPISOPW_${tag}_hashed"    # becomes KPANEL_PASSWORD_HASH
 PW2="KPISOPW_${tag}_typed"    # typed into hashpw.py during the watch
-DC=("$DOCKER" compose -p "$P" -f "$root/docker-compose.yml" -f "$here/isolation.yml")
-# EXTRA_OVERLAY: one more compose file, e.g. one that puts kpanel back on uid
-# 1000 to see this test fail the way 0.3.0 did.
-[[ ${EXTRA_OVERLAY:-} ]] && DC+=(-f "$EXTRA_OVERLAY")
+# EXTRA_OVERLAY: more compose files, colon-separated, added after the test's
+# own (e.g. one that undoes a fix, to see the test fail).
+extra=()
+IFS=: read -r -a _xo <<<"${EXTRA_OVERLAY:-}"
+for _f in ${_xo[@]+"${_xo[@]}"}; do [[ -n $_f ]] && extra+=(-f "$_f"); done
+DC=("$DOCKER" compose -p "$P" -f "$root/docker-compose.yml" -f "$here/isolation.yml" ${extra[@]+"${extra[@]}"})
 DC+=(--env-file "$work/env")
 
 cleanup() {

@@ -23,11 +23,13 @@ services:
       - "127.0.0.1:$PORT:8080"
     environment:
       KPANEL_UPDATE_CHECK: "0"
-  filebrowser:
-    sysctls:
-      net.ipv4.ip_unprivileged_port_start: "0"
 YML
-DC=("$DOCKER" compose -p "$P" -f "$root/docker-compose.yml" -f "$work/test.yml")
+# EXTRA_OVERLAY: more compose files, colon-separated, added after the test's
+# own (e.g. one that undoes a fix, to see the test fail).
+extra=()
+IFS=: read -r -a _xo <<<"${EXTRA_OVERLAY:-}"
+for _f in ${_xo[@]+"${_xo[@]}"}; do [[ -n $_f ]] && extra+=(-f "$_f"); done
+DC=("$DOCKER" compose -p "$P" -f "$root/docker-compose.yml" -f "$work/test.yml" ${extra[@]+"${extra[@]}"})
 cleanup() { "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1 || true; rm -rf "$work"; }
 trap cleanup EXIT
 fail=0

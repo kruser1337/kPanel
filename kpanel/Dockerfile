@@ -21,11 +21,6 @@ RUN addgroup -g 1000 mc && adduser -D -u 1001 -G mc admin
 # Dashboard history lives here (volume kpanel-state). Owned by the panel in the
 # image, so a fresh named volume mounted over it inherits that ownership.
 RUN mkdir -p /var/lib/kpanel && chown 1001:1000 /var/lib/kpanel
-# The server's volumes, owned as in the itzg images. Podman hands a fresh, empty
-# named volume to the first container that mounts it, as that container's
-# mount point is owned: without these that could be the panel's 1001, and the
-# server could not write its own /data.
-RUN mkdir -p /data /backups && chown 1000:1000 /data /backups && chmod 750 /data
 USER 1001:1000
 
 EXPOSE 8080

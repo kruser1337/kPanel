@@ -28,15 +28,17 @@ services:
     ports: !reset []
     environment:
       KPANEL_UPDATE_CHECK: "0"
-  filebrowser:
-    sysctls:
-      net.ipv4.ip_unprivileged_port_start: "0"
   mc-backup:
     environment:
       CRON_SCHEDULE: "* * * * *"
 EOF
-OLD=("$DOCKER" compose -p "$P" -f "$work/old/docker-compose.yml" -f "$work/test.yml")
-NEW=("$DOCKER" compose -p "$P" -f "$root/docker-compose.yml" -f "$work/test.yml")
+# EXTRA_OVERLAY: more compose files, colon-separated, added after the test's
+# own (e.g. one that undoes a fix, to see the test fail).
+extra=()
+IFS=: read -r -a _xo <<<"${EXTRA_OVERLAY:-}"
+for _f in ${_xo[@]+"${_xo[@]}"}; do [[ -n $_f ]] && extra+=(-f "$_f"); done
+OLD=("$DOCKER" compose -p "$P" -f "$work/old/docker-compose.yml" -f "$work/test.yml" ${extra[@]+"${extra[@]}"})
+NEW=("$DOCKER" compose -p "$P" -f "$root/docker-compose.yml" -f "$work/test.yml" ${extra[@]+"${extra[@]}"})
 cleanup() {
   "${NEW[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$work"
